@@ -791,8 +791,11 @@ with col_izq:
         racha, texto_mol = calcular_racha_molestias(hist_jugador)
         if racha > 0:
             nombre_j = hist_jugador.iloc[-1]["nombre"]
-            doms_serie = hist_jugador.loc[hist_jugador["tipo"] == "WELLNESS", "doms"].dropna()
-            doms_val = doms_serie.iloc[-1] if not doms_serie.empty else None
+            if "doms" in hist_jugador.columns:
+                doms_serie = hist_jugador.loc[hist_jugador["tipo"] == "WELLNESS", "doms"].dropna()
+                doms_val = doms_serie.iloc[-1] if not doms_serie.empty else None
+            else:
+                doms_val = None
             filas_molestia.append({"id": id_j, "nombre": nombre_j, "molestia": texto_mol, "racha": racha, "doms": doms_val})
     st.markdown(
         f"<div style='font-size:1.15rem; font-weight:900; color:#fca5a5; "
