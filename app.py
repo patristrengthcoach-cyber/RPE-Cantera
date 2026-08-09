@@ -310,28 +310,29 @@ def generar_pdf_informe(
         except Exception:
             logo_html = ""
 
-    # Anchos fijos por columna (en vez de dejar que xhtml2pdf los calcule solo):
-    # con pocas filas de datos, su algoritmo de autoajuste puede asignar a una
-    # columna un ancho menor que su propio padding y reventar con ValueError.
-    kpi_colgroup_html = "".join(f'<col style="width:{100 / max(len(kpis), 1):.2f}%;" />' for _ in kpis)
-
+    # Anchos fijos por columna usando el atributo HTML "width" (no CSS) en cada
+    # celda: es lo único que este motor respeta de forma fiable. Con pocas filas
+    # de datos, su algoritmo de autoajuste puede asignar a una columna un ancho
+    # menor que su propio padding y reventar con ValueError.
+    ancho_kpi = f"{100 / max(len(kpis), 1):.2f}%"
     kpi_html = "".join(
-        f'<td style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
+        f'<td width="{ancho_kpi}" style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
         f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.5px; color:#9ca3af; font-weight:bold;">{label}</div>'
         f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:2px;">{valor}</div></td>'
         for label, valor, color in kpis
     )
 
-    # anchos del roster: [dot, ID, Nombre, valor(es), ACWR, Disponibilidad, Molestias]
-    if len(columnas_roster) == 8:
-        anchos_roster = [3, 8, 20, 9, 10, 9, 14, 27]
+    # anchos del roster: [ID (+punto de riesgo), Nombre, valor(es), ACWR, Disponibilidad, Molestias]
+    if len(columnas_roster) == 7:
+        anchos_roster = [12, 25, 10, 11, 9, 15, 18]
     else:
-        anchos_roster = [3, 9, 24, 11, 9, 15, 29]
+        anchos_roster = [14, 30, 12, 10, 16, 18]
     if len(anchos_roster) != len(columnas_roster):
         anchos_roster = [round(100 / len(columnas_roster), 2)] * len(columnas_roster)
-    roster_colgroup_html = "".join(f'<col style="width:{a}%;" />' for a in anchos_roster)
 
-    roster_header_html = "".join(f"<th>{c}</th>" for c in columnas_roster)
+    roster_header_html = "".join(
+        f'<th width="{a}%">{c}</th>' for c, a in zip(columnas_roster, anchos_roster)
+    )
     if filas_roster:
         roster_rows_html = "".join(
             "<tr>" + "".join(f"<td>{celda}</td>" for celda in fila) + "</tr>" for fila in filas_roster
@@ -345,11 +346,9 @@ def generar_pdf_informe(
     ficha_html = ""
     if jugador_info:
         detalle_items = jugador_info.get("detalle_items", [])
-        detalle_colgroup_html = "".join(
-            f'<col style="width:{100 / max(len(detalle_items), 1):.2f}%;" />' for _ in detalle_items
-        )
+        ancho_detalle = f"{100 / max(len(detalle_items), 1):.2f}%"
         detalle_html = "".join(
-            f'<td style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
+            f'<td width="{ancho_detalle}" style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
             f'<div style="font-size:6.5pt; text-transform:uppercase; color:#9ca3af; font-weight:bold;">{lab}</div>'
             f'<div style="font-size:11pt; font-weight:bold; color:{col};">{val}</div></td>'
             for lab, val, col in detalle_items
@@ -364,10 +363,7 @@ def generar_pdf_informe(
                 Disponibilidad: <span style="color:{jugador_info['disp_color']}; font-weight:bold;">{jugador_info['disponibilidad']}</span> &middot;
                 Molestias: <span style="color:{jugador_info['mol_color']}; font-weight:bold;">{jugador_info['molestias']}</span>
             </div>
-            <table style="width:100%; border-collapse:collapse; margin-top:6px;">
-                <colgroup>{detalle_colgroup_html}</colgroup>
-                <tr>{detalle_html}</tr>
-            </table>
+            <table style="width:100%; border-collapse:collapse; margin-top:6px;"><tr>{detalle_html}</tr></table>
         </div>
         """
 
@@ -426,13 +422,11 @@ def generar_pdf_informe(
   <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
   <table class="kpi">
-    <colgroup>{kpi_colgroup_html}</colgroup>
     <tr>{kpi_html}</tr>
   </table>
 
   <div class="section-title">Monitoreo de Plantilla</div>
   <table class="roster">
-    <colgroup>{roster_colgroup_html}</colgroup>
     <thead><tr>{roster_header_html}</tr></thead>
     <tbody>{roster_rows_html}</tbody>
   </table>
@@ -1237,9 +1231,9 @@ kpis_pdf = [
 ]
 
 if vista_key == "wellness":
-    columnas_roster_pdf = ["", "ID", "Nombre", "Wellness", "ACWR", "Disponibilidad", "Molestias"]
+    columnas_roster_pdf = ["ID", "Nombre", "Wellness", "ACWR", "Disponibilidad", "Molestias"]
 else:
-    columnas_roster_pdf = ["", "ID", "Nombre", "RPE", "Rendimiento", "ACWR", "Disponibilidad", "Molestias"]
+    columnas_roster_pdf = ["ID", "Nombre", "RPE", "Rendimiento", "ACWR", "Disponibilidad", "Molestias"]
 
 filas_roster_pdf = []
 for _, row_pdf in roster.iterrows():
@@ -1248,14 +1242,14 @@ for _, row_pdf in roster.iterrows():
     disp_color_pdf = "#22c55e" if disp_txt_pdf == "DISPONIBLE" else "#ef4444"
     mol_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
     acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
+    id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;{row_pdf.get("idJugador", "")}'
 
     if vista_key == "wellness":
         val_pdf = row_pdf.get("wellness_score")
         val_color_pdf = color_escala_1_5(val_pdf)
         val_txt_pdf = f"{val_pdf:.1f}" if pd.notna(val_pdf) else "—"
         filas_roster_pdf.append([
-            _dot_html(riesgo_color_pdf),
-            str(row_pdf.get("idJugador", "")),
+            id_html_pdf,
             str(row_pdf.get("nombre", "")),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
             acwr_txt_pdf,
@@ -1269,8 +1263,7 @@ for _, row_pdf in roster.iterrows():
         rend_pdf = row_pdf.get("rendimiento")
         rend_txt_pdf = f"{rend_pdf:.0f}" if pd.notna(rend_pdf) else "—"
         filas_roster_pdf.append([
-            _dot_html(riesgo_color_pdf),
-            str(row_pdf.get("idJugador", "")),
+            id_html_pdf,
             str(row_pdf.get("nombre", "")),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
             rend_txt_pdf,
