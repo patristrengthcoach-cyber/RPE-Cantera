@@ -310,12 +310,26 @@ def generar_pdf_informe(
         except Exception:
             logo_html = ""
 
+    # Anchos fijos por columna (en vez de dejar que xhtml2pdf los calcule solo):
+    # con pocas filas de datos, su algoritmo de autoajuste puede asignar a una
+    # columna un ancho menor que su propio padding y reventar con ValueError.
+    kpi_colgroup_html = "".join(f'<col style="width:{100 / max(len(kpis), 1):.2f}%;" />' for _ in kpis)
+
     kpi_html = "".join(
         f'<td style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
         f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.5px; color:#9ca3af; font-weight:bold;">{label}</div>'
         f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:2px;">{valor}</div></td>'
         for label, valor, color in kpis
     )
+
+    # anchos del roster: [dot, ID, Nombre, valor(es), ACWR, Disponibilidad, Molestias]
+    if len(columnas_roster) == 8:
+        anchos_roster = [3, 8, 20, 9, 10, 9, 14, 27]
+    else:
+        anchos_roster = [3, 9, 24, 11, 9, 15, 29]
+    if len(anchos_roster) != len(columnas_roster):
+        anchos_roster = [round(100 / len(columnas_roster), 2)] * len(columnas_roster)
+    roster_colgroup_html = "".join(f'<col style="width:{a}%;" />' for a in anchos_roster)
 
     roster_header_html = "".join(f"<th>{c}</th>" for c in columnas_roster)
     if filas_roster:
@@ -330,11 +344,15 @@ def generar_pdf_informe(
 
     ficha_html = ""
     if jugador_info:
+        detalle_items = jugador_info.get("detalle_items", [])
+        detalle_colgroup_html = "".join(
+            f'<col style="width:{100 / max(len(detalle_items), 1):.2f}%;" />' for _ in detalle_items
+        )
         detalle_html = "".join(
             f'<td style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
             f'<div style="font-size:6.5pt; text-transform:uppercase; color:#9ca3af; font-weight:bold;">{lab}</div>'
             f'<div style="font-size:11pt; font-weight:bold; color:{col};">{val}</div></td>'
-            for lab, val, col in jugador_info.get("detalle_items", [])
+            for lab, val, col in detalle_items
         )
         ficha_html = f"""
         <div class="section-title">Ficha Individual</div>
@@ -346,7 +364,10 @@ def generar_pdf_informe(
                 Disponibilidad: <span style="color:{jugador_info['disp_color']}; font-weight:bold;">{jugador_info['disponibilidad']}</span> &middot;
                 Molestias: <span style="color:{jugador_info['mol_color']}; font-weight:bold;">{jugador_info['molestias']}</span>
             </div>
-            <table style="width:100%; border-collapse:collapse; margin-top:6px;"><tr>{detalle_html}</tr></table>
+            <table style="width:100%; border-collapse:collapse; margin-top:6px;">
+                <colgroup>{detalle_colgroup_html}</colgroup>
+                <tr>{detalle_html}</tr>
+            </table>
         </div>
         """
 
@@ -404,10 +425,14 @@ def generar_pdf_informe(
   {header_html}
   <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
-  <table class="kpi"><tr>{kpi_html}</tr></table>
+  <table class="kpi">
+    <colgroup>{kpi_colgroup_html}</colgroup>
+    <tr>{kpi_html}</tr>
+  </table>
 
   <div class="section-title">Monitoreo de Plantilla</div>
   <table class="roster">
+    <colgroup>{roster_colgroup_html}</colgroup>
     <thead><tr>{roster_header_html}</tr></thead>
     <tbody>{roster_rows_html}</tbody>
   </table>
