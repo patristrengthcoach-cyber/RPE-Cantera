@@ -350,6 +350,22 @@ def generar_pdf_informe(
         </div>
         """
 
+    if logo_html:
+        header_html = f"""
+        <table style="width:100%; border-collapse:collapse; margin-bottom:2px;"><tr>
+            <td style="width:44px; white-space:nowrap; padding-right:8px; vertical-align:middle;">{logo_html}</td>
+            <td style="vertical-align:middle;">
+              <div class="titulo">RACING CLUB DE FERROL</div>
+              <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
+            </td>
+        </tr></table>
+        """
+    else:
+        header_html = f"""
+        <div class="titulo">RACING CLUB DE FERROL</div>
+        <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
+        """
+
     charts_html = ""
     if fig_evolucion_png:
         charts_html += f"""
@@ -385,13 +401,7 @@ def generar_pdf_informe(
 </style>
 </head>
 <body>
-  <table style="width:100%; border-collapse:collapse; margin-bottom:2px;"><tr>
-    <td style="width:1%; white-space:nowrap; padding-right:10px;">{logo_html}</td>
-    <td>
-      <div class="titulo">RACING CLUB DE FERROL</div>
-      <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
-    </td>
-  </tr></table>
+  {header_html}
   <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
   <table class="kpi"><tr>{kpi_html}</tr></table>
@@ -1294,19 +1304,24 @@ with pdf_placeholder:
     with col_pdf_btn:
         if st.button("📄 Generar informe PDF", use_container_width=True, key="btn_generar_pdf"):
             with st.spinner("Generando informe PDF..."):
-                st.session_state["pdf_bytes"] = generar_pdf_informe(
-                    categoria_label=CATEGORIA,
-                    vista_label=vista_label_pdf,
-                    filtros_texto=filtros_texto_pdf,
-                    kpis=kpis_pdf,
-                    columnas_roster=columnas_roster_pdf,
-                    filas_roster=filas_roster_pdf,
-                    jugador_info=jugador_info_pdf,
-                    fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
-                    fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
-                    subtitulo_semana=subtitulo_semana_pdf,
-                )
-                st.session_state["pdf_firma"] = firma_actual_pdf
+                try:
+                    st.session_state["pdf_bytes"] = generar_pdf_informe(
+                        categoria_label=CATEGORIA,
+                        vista_label=vista_label_pdf,
+                        filtros_texto=filtros_texto_pdf,
+                        kpis=kpis_pdf,
+                        columnas_roster=columnas_roster_pdf,
+                        filas_roster=filas_roster_pdf,
+                        jugador_info=jugador_info_pdf,
+                        fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
+                        fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
+                        subtitulo_semana=subtitulo_semana_pdf,
+                    )
+                    st.session_state["pdf_firma"] = firma_actual_pdf
+                except Exception as e_pdf:
+                    st.session_state["pdf_bytes"] = None
+                    st.error("❌ No se pudo generar el PDF.")
+                    st.exception(e_pdf)
     with col_pdf_dl:
         if st.session_state["pdf_bytes"] is not None and st.session_state["pdf_firma"] == firma_actual_pdf:
             nombre_pdf = f"informe_{categoria_key}_{vista_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf"
