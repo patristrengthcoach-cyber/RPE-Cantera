@@ -2,4 +2,4 @@ streamlit
 pandas
 plotly
 kaleido
-reportlab
+xhtml2pdf

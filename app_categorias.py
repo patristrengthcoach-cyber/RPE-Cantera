@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import math
@@ -7,11 +8,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+from xhtml2pdf import pisa
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
@@ -265,17 +262,19 @@ def render_section_title(texto):
     )
 
 
-def _fig_a_imagen_bytes(fig, width=1000, height=450):
-    """Exporta una figura de Plotly a PNG con fondo claro, apta para imprimir en PDF."""
+RIESGO_COLOR_HEX = {"rojo": "#ef4444", "amarillo": "#facc15", "verde": "#16a34a"}
+
+
+def _dot_html(color):
+    """Punto de color (sustituye a los emoji 🔴🟡🟢, que no siempre se imprimen bien en PDF)."""
+    return f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background-color:{color};"></span>'
+
+
+def _fig_a_imagen_bytes(fig, width=1000, height=420, scale=2):
+    """Exporta una figura de Plotly a PNG conservando su estilo oscuro original
+    (fondo transparente), para que encaje visualmente con las tarjetas del PDF."""
     try:
-        fig_export = go.Figure(fig)
-        fig_export.update_layout(
-            template="plotly_white",
-            paper_bgcolor="white",
-            plot_bgcolor="white",
-            font=dict(color="#0f172a"),
-        )
-        return fig_export.to_image(format="png", width=width, height=height, scale=2)
+        return fig.to_image(format="png", width=width, height=height, scale=scale)
     except Exception:
         return None
 
@@ -285,90 +284,131 @@ def generar_pdf_informe(
     vista_label,
     filtros_texto,
     kpis,
-    columnas_tabla,
-    filas_tabla,
+    columnas_roster,
+    filas_roster,
     jugador_info,
-    fig_evolucion,
-    fig_semana,
+    fig_evolucion_png,
+    fig_semana_png,
     subtitulo_semana,
 ):
-    """Construye un informe PDF con el resumen de KPIs, la tabla de la plantilla
-    filtrada (según categoría/vista/filtros actuales), la ficha del jugador
-    seleccionado (si hay uno) y los gráficos de carga."""
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+    """Construye un informe PDF que reproduce el aspecto visual del dashboard
+    (mismos colores, tarjetas oscuras y tipografía) usando HTML + xhtml2pdf,
+    en vez de un documento de tablas genéricas."""
+
+    def _img_tag(png_bytes, css=""):
+        if not png_bytes:
+            return ""
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        return f'<img src="data:image/png;base64,{b64}" style="{css}" />'
+
+    logo_html = ""
+    if os.path.exists("logo.png"):
+        try:
+            with open("logo.png", "rb") as f_logo:
+                logo_b64 = base64.b64encode(f_logo.read()).decode("ascii")
+            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:30px; vertical-align:middle;" />'
+        except Exception:
+            logo_html = ""
+
+    kpi_html = "".join(
+        f'<td style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
+        f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.5px; color:#9ca3af; font-weight:bold;">{label}</div>'
+        f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:2px;">{valor}</div></td>'
+        for label, valor, color in kpis
     )
-    styles = getSampleStyleSheet()
-    estilo_titulo = ParagraphStyle("TituloRCF", parent=styles["Title"], fontSize=18, textColor=colors.HexColor("#0f172a"))
-    estilo_subtitulo = ParagraphStyle("SubtituloRCF", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#475569"), spaceAfter=4)
-    estilo_seccion = ParagraphStyle("SeccionRCF", parent=styles["Heading2"], fontSize=13, textColor=colors.HexColor("#0f172a"), spaceBefore=14, spaceAfter=6)
-    estilo_normal = styles["Normal"]
 
-    elementos = [
-        Paragraph("Racing Club de Ferrol — Informe de Rendimiento", estilo_titulo),
-        Paragraph(f"Categoría: <b>{categoria_label}</b> · Vista: <b>{vista_label}</b>", estilo_subtitulo),
-        Paragraph(f"Filtros aplicados: {filtros_texto}", estilo_subtitulo),
-        Paragraph(f"Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}", estilo_subtitulo),
-        Spacer(1, 10),
-    ]
-
-    elementos.append(Paragraph("Resumen", estilo_seccion))
-    tabla_kpi = Table([[k for k, _ in kpis], [v for _, v in kpis]], hAlign="LEFT")
-    tabla_kpi.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    elementos.append(tabla_kpi)
-
-    elementos.append(Paragraph("Plantilla — Selección actual", estilo_seccion))
-    if len(filas_tabla) > 0:
-        tabla = Table([columnas_tabla] + filas_tabla, hAlign="LEFT", repeatRows=1)
-        tabla.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#10b981")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        elementos.append(tabla)
+    roster_header_html = "".join(f"<th>{c}</th>" for c in columnas_roster)
+    if filas_roster:
+        roster_rows_html = "".join(
+            "<tr>" + "".join(f"<td>{celda}</td>" for celda in fila) + "</tr>" for fila in filas_roster
+        )
     else:
-        elementos.append(Paragraph("Sin registros para esta selección.", estilo_normal))
+        roster_rows_html = (
+            f'<tr><td colspan="{len(columnas_roster)}" style="text-align:center; color:#9ca3af; padding:10px;">'
+            f"Sin registros para esta selección.</td></tr>"
+        )
 
+    ficha_html = ""
     if jugador_info:
-        elementos.append(Paragraph(f"Ficha Individual — {jugador_info['nombre']}", estilo_seccion))
-        elementos.append(Paragraph(
-            f"Código: {jugador_info['id']} · ACWR: {jugador_info['acwr']} · "
-            f"Disponibilidad: {jugador_info['disponibilidad']} · Molestias: {jugador_info['molestias']}",
-            estilo_normal,
-        ))
-        if jugador_info.get("detalle"):
-            elementos.append(Spacer(1, 4))
-            elementos.append(Paragraph(jugador_info["detalle"], estilo_normal))
+        detalle_html = "".join(
+            f'<td style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
+            f'<div style="font-size:6.5pt; text-transform:uppercase; color:#9ca3af; font-weight:bold;">{lab}</div>'
+            f'<div style="font-size:11pt; font-weight:bold; color:{col};">{val}</div></td>'
+            for lab, val, col in jugador_info.get("detalle_items", [])
+        )
+        ficha_html = f"""
+        <div class="section-title">Ficha Individual</div>
+        <div class="ficha-box">
+            <div class="ficha-nombre">{jugador_info['nombre']}</div>
+            <div class="ficha-meta">
+                Código: {jugador_info['id']} &middot;
+                ACWR: <span style="color:{jugador_info['acwr_color']}; font-weight:bold;">{jugador_info['acwr']}</span> &middot;
+                Disponibilidad: <span style="color:{jugador_info['disp_color']}; font-weight:bold;">{jugador_info['disponibilidad']}</span> &middot;
+                Molestias: <span style="color:{jugador_info['mol_color']}; font-weight:bold;">{jugador_info['molestias']}</span>
+            </div>
+            <table style="width:100%; border-collapse:collapse; margin-top:6px;"><tr>{detalle_html}</tr></table>
+        </div>
+        """
 
-    if fig_evolucion is not None:
-        img_bytes = _fig_a_imagen_bytes(fig_evolucion)
-        if img_bytes:
-            elementos.append(Paragraph("Evolución de la Carga (sRPE, últimos 7 días)", estilo_seccion))
-            elementos.append(RLImage(io.BytesIO(img_bytes), width=17 * cm, height=17 * cm * 450 / 1000))
+    charts_html = ""
+    if fig_evolucion_png:
+        charts_html += f"""
+        <div class="section-title">Evolución de la Carga (sRPE, últimos 7 días)</div>
+        <div class="chart-box">{_img_tag(fig_evolucion_png, "width:100%;")}</div>
+        """
+    if fig_semana_png:
+        charts_html += f"""
+        <div class="section-title">Carga por Día de la Semana &mdash; {subtitulo_semana}</div>
+        <div class="chart-box">{_img_tag(fig_semana_png, "width:100%;")}</div>
+        """
 
-    if fig_semana is not None:
-        img_bytes = _fig_a_imagen_bytes(fig_semana)
-        if img_bytes:
-            elementos.append(Paragraph(f"Carga por Día de la Semana — {subtitulo_semana}", estilo_seccion))
-            elementos.append(RLImage(io.BytesIO(img_bytes), width=17 * cm, height=17 * cm * 450 / 1000))
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  @page {{ size: A4; margin: 1.3cm; }}
+  body {{ background-color: #030712; color: #e5e7eb; font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; }}
+  .titulo {{ font-size: 19pt; font-weight: bold; color: #ffffff; letter-spacing: 0.3px; }}
+  .caption {{ font-size: 7.5pt; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }}
+  .meta {{ font-size: 8pt; color: #9ca3af; margin: 6px 0 12px 0; }}
+  .meta b {{ color: #e5e7eb; }}
+  .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 14px 0 6px 0; }}
+  table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; border: 1.5px solid #155e63; }}
+  table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; }}
+  table.roster th {{ background-color: #10b981; color: #ffffff; padding: 5px 4px; text-align: center; }}
+  table.roster td {{ padding: 4px 5px; text-align: center; border-bottom: 1px solid #1e293b; background-color: #0f172a; color: #e5e7eb; }}
+  .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 10px 12px; }}
+  .ficha-nombre {{ font-size: 13pt; font-weight: bold; color: #ffffff; }}
+  .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 8px 0; }}
+  .chart-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 6px; text-align: center; }}
+</style>
+</head>
+<body>
+  <table style="width:100%; border-collapse:collapse; margin-bottom:2px;"><tr>
+    <td style="width:1%; white-space:nowrap; padding-right:10px;">{logo_html}</td>
+    <td>
+      <div class="titulo">RACING CLUB DE FERROL</div>
+      <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
+    </td>
+  </tr></table>
+  <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
-    doc.build(elementos)
+  <table class="kpi"><tr>{kpi_html}</tr></table>
+
+  <div class="section-title">Monitoreo de Plantilla</div>
+  <table class="roster">
+    <thead><tr>{roster_header_html}</tr></thead>
+    <tbody>{roster_rows_html}</tbody>
+  </table>
+
+  {ficha_html}
+  {charts_html}
+</body>
+</html>"""
+
+    buffer = io.BytesIO()
+    pisa.CreatePDF(src=html, dest=buffer, encoding="utf-8")
     buffer.seek(0)
     return buffer.getvalue()
 
@@ -1140,69 +1180,105 @@ with st.container(border=True):
 # ============================================================
 if vista_key == "wellness" and "wellness_score" in roster.columns:
     _serie_media_pdf = roster["wellness_score"].dropna()
-    media_label_pdf = "Media Wellness Grupal"
-    media_txt_pdf = f"{_serie_media_pdf.mean():.1f}" if not _serie_media_pdf.empty else "—"
+    if not _serie_media_pdf.empty:
+        _media_val_pdf = _serie_media_pdf.mean()
+        media_label_pdf, media_txt_pdf, media_color_pdf = "Media Wellness Grupal", f"{_media_val_pdf:.1f}", color_escala_1_5(_media_val_pdf)
+    else:
+        media_label_pdf, media_txt_pdf, media_color_pdf = "Media Wellness Grupal", "—", "#f1f5f9"
 else:
     _serie_media_pdf = df_vista["rpe"].dropna() if "rpe" in df_vista.columns else pd.Series(dtype=float)
-    media_label_pdf = "RPE Medio"
-    media_txt_pdf = f"{_serie_media_pdf.mean():.1f}" if not _serie_media_pdf.empty else "—"
+    if not _serie_media_pdf.empty:
+        _media_val_pdf = _serie_media_pdf.mean()
+        media_label_pdf, media_txt_pdf, media_color_pdf = "RPE Medio", f"{_media_val_pdf:.1f}", color_rpe(_media_val_pdf)
+    else:
+        media_label_pdf, media_txt_pdf, media_color_pdf = "RPE Medio", "—", "#f1f5f9"
+
+kpis_pdf = [
+    (label_kpi1, str(valor_kpi1), "#f1f5f9"),
+    ("Disponibles", str(disponibles), "#22c55e"),
+    ("No disponible / Bajas", str(bajas), "#ef4444"),
+    (media_label_pdf, media_txt_pdf, media_color_pdf),
+    ("Alertas Críticas ACWR", str(alertas_rojo), "#ef4444"),
+]
 
 if vista_key == "wellness":
-    columnas_tabla_pdf = ["ID", "Nombre", "Wellness", "ACWR", "Disponibilidad", "Molestias"]
+    columnas_roster_pdf = ["", "ID", "Nombre", "Wellness", "ACWR", "Disponibilidad", "Molestias"]
 else:
-    columnas_tabla_pdf = ["ID", "Nombre", "RPE", "Rendimiento", "ACWR", "Disponibilidad", "Molestias"]
+    columnas_roster_pdf = ["", "ID", "Nombre", "RPE", "Rendimiento", "ACWR", "Disponibilidad", "Molestias"]
 
-filas_tabla_pdf = []
-for _, row_pdf in roster.sort_values("nombre").iterrows():
-    molestias_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
+filas_roster_pdf = []
+for _, row_pdf in roster.iterrows():
+    riesgo_color_pdf = RIESGO_COLOR_HEX.get(row_pdf.get("colorRiesgo"), "#6b7280")
+    disp_txt_pdf = row_pdf.get("disponibilidad", "—")
+    disp_color_pdf = "#22c55e" if disp_txt_pdf == "DISPONIBLE" else "#ef4444"
+    mol_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
+    acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
+
     if vista_key == "wellness":
-        val_wellness_pdf = row_pdf.get("wellness_score")
-        filas_tabla_pdf.append([
+        val_pdf = row_pdf.get("wellness_score")
+        val_color_pdf = color_escala_1_5(val_pdf)
+        val_txt_pdf = f"{val_pdf:.1f}" if pd.notna(val_pdf) else "—"
+        filas_roster_pdf.append([
+            _dot_html(riesgo_color_pdf),
             str(row_pdf.get("idJugador", "")),
             str(row_pdf.get("nombre", "")),
-            f"{val_wellness_pdf:.1f}" if pd.notna(val_wellness_pdf) else "—",
-            str(row_pdf.get("acwr", "—")),
-            str(row_pdf.get("disponibilidad", "—")),
-            molestias_txt_pdf,
+            f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
+            acwr_txt_pdf,
+            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
+            mol_txt_pdf,
         ])
     else:
-        val_rpe_pdf = row_pdf.get("rpe")
-        val_rend_pdf = row_pdf.get("rendimiento")
-        filas_tabla_pdf.append([
+        val_pdf = row_pdf.get("rpe")
+        val_color_pdf = color_rpe(val_pdf)
+        val_txt_pdf = f"{val_pdf:.0f}" if pd.notna(val_pdf) else "—"
+        rend_pdf = row_pdf.get("rendimiento")
+        rend_txt_pdf = f"{rend_pdf:.0f}" if pd.notna(rend_pdf) else "—"
+        filas_roster_pdf.append([
+            _dot_html(riesgo_color_pdf),
             str(row_pdf.get("idJugador", "")),
             str(row_pdf.get("nombre", "")),
-            f"{val_rpe_pdf:.0f}" if pd.notna(val_rpe_pdf) else "—",
-            f"{val_rend_pdf:.0f}" if pd.notna(val_rend_pdf) else "—",
-            str(row_pdf.get("acwr", "—")),
-            str(row_pdf.get("disponibilidad", "—")),
-            molestias_txt_pdf,
+            f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
+            rend_txt_pdf,
+            acwr_txt_pdf,
+            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
+            mol_txt_pdf,
         ])
 
 jugador_info_pdf = None
 if fila_jugador is not None:
+    riesgo_color_sel_pdf = RIESGO_COLOR_HEX.get(fila_jugador.get("colorRiesgo"), "#6b7280")
+    disp_txt_sel_pdf = fila_jugador.get("disponibilidad", "—")
+    disp_color_sel_pdf = "#22c55e" if disp_txt_sel_pdf == "DISPONIBLE" else "#ef4444"
+    mol_txt_sel_pdf = fila_jugador.get("molestias_estado") or "Sin molestias"
+
     if vista_key == "wellness":
-        detalle_partes_pdf = []
-        for etiqueta_pdf, campo_pdf in [("Fatiga", "fatiga"), ("Sueño", "sueno"), ("Estrés", "estres"), ("DOMS", "doms"), ("Orina", "orina")]:
+        detalle_items_pdf = []
+        for etiqueta_pdf, campo_pdf in [("Fatiga", "fatiga"), ("Sueño", "sueno"), ("Estrés", "estres"), ("DOMS", "doms")]:
             v_pdf = fila_jugador.get(campo_pdf)
-            detalle_partes_pdf.append(f"{etiqueta_pdf}: {v_pdf:g}" if pd.notna(v_pdf) else f"{etiqueta_pdf}: —")
+            detalle_items_pdf.append((etiqueta_pdf, f"{v_pdf:g}" if pd.notna(v_pdf) else "—", color_escala_1_5(v_pdf)))
+        orina_pdf = fila_jugador.get("orina")
+        color_orina_pdf = "#ef4444" if pd.notna(orina_pdf) and orina_pdf >= 9 else "#f1f5f9"
+        detalle_items_pdf.append(("Orina", f"{orina_pdf:g}" if pd.notna(orina_pdf) else "—", color_orina_pdf))
         if "periodo" in fila_jugador.index and pd.notna(fila_jugador.get("periodo")):
-            detalle_partes_pdf.append(f"Período: {fila_jugador.get('periodo')}")
-        detalle_texto_pdf = " · ".join(detalle_partes_pdf)
+            detalle_items_pdf.append(("Período", str(fila_jugador.get("periodo")), "#f472b6"))
     else:
         rpe_v_pdf = fila_jugador.get("rpe")
         rend_v_pdf = fila_jugador.get("rendimiento")
-        detalle_texto_pdf = (
-            (f"RPE: {rpe_v_pdf:g}" if pd.notna(rpe_v_pdf) else "RPE: —")
-            + " · "
-            + (f"Rendimiento: {rend_v_pdf:g}" if pd.notna(rend_v_pdf) else "Rendimiento: —")
-        )
+        detalle_items_pdf = [
+            ("RPE", f"{rpe_v_pdf:g}" if pd.notna(rpe_v_pdf) else "—", color_rpe(rpe_v_pdf)),
+            ("Rendimiento", f"{rend_v_pdf:g}" if pd.notna(rend_v_pdf) else "—", "#f1f5f9"),
+        ]
+
     jugador_info_pdf = {
         "nombre": fila_jugador.get("nombre", ""),
         "id": jugador_sel_id,
         "acwr": fila_jugador.get("acwr", "—"),
-        "disponibilidad": fila_jugador.get("disponibilidad", "—"),
-        "molestias": fila_jugador.get("molestias_estado") or "Sin molestias",
-        "detalle": detalle_texto_pdf,
+        "acwr_color": riesgo_color_sel_pdf,
+        "disponibilidad": disp_txt_sel_pdf,
+        "disp_color": disp_color_sel_pdf,
+        "molestias": mol_txt_sel_pdf,
+        "mol_color": "#fb923c" if mol_txt_sel_pdf != "Sin molestias" else "#9ca3af",
+        "detalle_items": detalle_items_pdf,
     }
 
 filtros_texto_pdf = f"Mes: {mes_sel} · Semana: {semana_sel} · Día: {dia_sel}"
@@ -1214,27 +1290,20 @@ if "pdf_bytes" not in st.session_state:
     st.session_state["pdf_firma"] = None
 
 with pdf_placeholder:
-    col_pdf_btn, col_pdf_dl, col_pdf_info = st.columns([2, 2, 5])
+    col_pdf_btn, col_pdf_dl = st.columns([1, 1])
     with col_pdf_btn:
         if st.button("📄 Generar informe PDF", use_container_width=True, key="btn_generar_pdf"):
             with st.spinner("Generando informe PDF..."):
-                kpis_pdf = [
-                    (label_kpi1, str(valor_kpi1)),
-                    ("Disponibles", str(disponibles)),
-                    ("Bajas", str(bajas)),
-                    (media_label_pdf, media_txt_pdf),
-                    ("Alertas ACWR", str(alertas_rojo)),
-                ]
                 st.session_state["pdf_bytes"] = generar_pdf_informe(
                     categoria_label=CATEGORIA,
                     vista_label=vista_label_pdf,
                     filtros_texto=filtros_texto_pdf,
                     kpis=kpis_pdf,
-                    columnas_tabla=columnas_tabla_pdf,
-                    filas_tabla=filas_tabla_pdf,
+                    columnas_roster=columnas_roster_pdf,
+                    filas_roster=filas_roster_pdf,
                     jugador_info=jugador_info_pdf,
-                    fig_evolucion=fig_evolucion_individual,
-                    fig_semana=fig_semana,
+                    fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
+                    fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
                     subtitulo_semana=subtitulo_semana_pdf,
                 )
                 st.session_state["pdf_firma"] = firma_actual_pdf
@@ -1247,5 +1316,3 @@ with pdf_placeholder:
             )
         elif st.session_state["pdf_bytes"] is not None:
             st.caption("Los filtros cambiaron: vuelve a generar el PDF.")
-    with col_pdf_info:
-        st.caption("Exporta la categoría, vista y filtros (Mes/Semana/Día) seleccionados ahora mismo: tabla de plantilla, ficha del jugador elegido (si hay) y gráficos.")
