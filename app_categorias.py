@@ -263,6 +263,7 @@ def render_section_title(texto):
 
 
 RIESGO_COLOR_HEX = {"rojo": "#ef4444", "amarillo": "#facc15", "verde": "#16a34a"}
+ETIQUETAS_RIESGO_PDF = {"rojo": "Pico de Estrés (Peligro)", "amarillo": "Precaución", "verde": "Sweet Spot (Adaptación)"}
 
 
 def _dot_html(color):
@@ -334,12 +335,15 @@ def generar_pdf_informe(
         f'<th width="{a}%">{c}</th>' for c, a in zip(columnas_roster, anchos_roster)
     )
     if filas_roster:
-        roster_rows_html = "".join(
-            "<tr>" + "".join(f"<td>{celda}</td>" for celda in fila) + "</tr>" for fila in filas_roster
-        )
+        filas_html_partes = []
+        for i, fila in enumerate(filas_roster):
+            bg_fila = "#0f172a" if i % 2 == 0 else "#0b1220"
+            celdas = "".join(f"<td>{celda}</td>" for celda in fila)
+            filas_html_partes.append(f'<tr style="background-color:{bg_fila};">{celdas}</tr>')
+        roster_rows_html = "".join(filas_html_partes)
     else:
         roster_rows_html = (
-            f'<tr><td colspan="{len(columnas_roster)}" style="text-align:center; color:#9ca3af; padding:10px;">'
+            f'<tr><td colspan="{len(columnas_roster)}" style="text-align:center; color:#9ca3af; padding:14px;">'
             f"Sin registros para esta selección.</td></tr>"
         )
 
@@ -348,22 +352,29 @@ def generar_pdf_informe(
         detalle_items = jugador_info.get("detalle_items", [])
         ancho_detalle = f"{100 / max(len(detalle_items), 1):.2f}%"
         detalle_html = "".join(
-            f'<td width="{ancho_detalle}" style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
-            f'<div style="font-size:6.5pt; text-transform:uppercase; color:#9ca3af; font-weight:bold;">{lab}</div>'
-            f'<div style="font-size:11pt; font-weight:bold; color:{col};">{val}</div></td>'
+            f'<td width="{ancho_detalle}" style="text-align:center; padding:7px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
+            f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.3px; color:#9ca3af; font-weight:bold;">{lab}</div>'
+            f'<div style="font-size:12pt; font-weight:bold; color:{col}; margin-top:2px;">{val}</div></td>'
             for lab, val, col in detalle_items
         )
+        pill_molestias_html = ""
+        if jugador_info["molestias"] != "Sin molestias":
+            pill_molestias_html = (
+                f'<span class="pill" style="background-color:#fb923c; color:#0a0f1c; margin-left:8px;">'
+                f'&#129700; {jugador_info["molestias"]}</span>'
+            )
         ficha_html = f"""
         <div class="section-title">Ficha Individual</div>
         <div class="ficha-box">
             <div class="ficha-nombre">{jugador_info['nombre']}</div>
-            <div class="ficha-meta">
-                Código: {jugador_info['id']} &middot;
-                ACWR: <span style="color:{jugador_info['acwr_color']}; font-weight:bold;">{jugador_info['acwr']}</span> &middot;
-                Disponibilidad: <span style="color:{jugador_info['disp_color']}; font-weight:bold;">{jugador_info['disponibilidad']}</span> &middot;
-                Molestias: <span style="color:{jugador_info['mol_color']}; font-weight:bold;">{jugador_info['molestias']}</span>
+            <div class="ficha-meta">Código: {jugador_info['id']} &middot; Último registro: {jugador_info.get('fecha', '—')}</div>
+            <div style="margin:8px 0 10px 0;">
+                <span class="pill" style="background-color:{jugador_info['acwr_color']}; color:#0a0f1c;">ACWR {jugador_info['acwr']}</span>
+                <span style="color:{jugador_info['acwr_color']}; font-weight:bold; margin-left:8px; font-size:8pt;">{jugador_info.get('etiqueta_riesgo', '')}</span>
+                <span class="pill" style="background-color:{jugador_info['disp_color']}; color:#0a0f1c; margin-left:10px;">{jugador_info['disponibilidad']}</span>
+                {pill_molestias_html}
             </div>
-            <table style="width:100%; border-collapse:collapse; margin-top:6px;"><tr>{detalle_html}</tr></table>
+            <table style="width:100%; border-collapse:collapse;"><tr>{detalle_html}</tr></table>
         </div>
         """
 
@@ -373,6 +384,7 @@ def generar_pdf_informe(
             <td style="width:44px; white-space:nowrap; padding-right:8px; vertical-align:middle;">{logo_html}</td>
             <td style="vertical-align:middle;">
               <div class="titulo">RACING CLUB DE FERROL</div>
+              <div class="subtitulo-informe">Informe de Rendimiento</div>
               <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
             </td>
         </tr></table>
@@ -380,20 +392,23 @@ def generar_pdf_informe(
     else:
         header_html = f"""
         <div class="titulo">RACING CLUB DE FERROL</div>
+        <div class="subtitulo-informe">Informe de Rendimiento</div>
         <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
         """
 
     charts_html = ""
     if fig_evolucion_png:
         charts_html += f"""
-        <div class="section-title">Evolución de la Carga (sRPE, últimos 7 días)</div>
+        <div class="section-title">Evolución de la Carga <span class="section-sub">sRPE, últimos 7 días</span></div>
         <div class="chart-box">{_img_tag(fig_evolucion_png, "width:100%;")}</div>
         """
     if fig_semana_png:
         charts_html += f"""
-        <div class="section-title">Carga por Día de la Semana &mdash; {subtitulo_semana}</div>
+        <div class="section-title">Carga por Día de la Semana <span class="section-sub">{subtitulo_semana}</span></div>
         <div class="chart-box">{_img_tag(fig_semana_png, "width:100%;")}</div>
         """
+
+    total_jugadores = len(filas_roster)
 
     html = f"""<!doctype html>
 <html>
@@ -402,30 +417,33 @@ def generar_pdf_informe(
 <style>
   @page {{ size: A4; margin: 1.3cm; }}
   body {{ background-color: #030712; color: #e5e7eb; font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; }}
-  .titulo {{ font-size: 19pt; font-weight: bold; color: #ffffff; letter-spacing: 0.3px; }}
-  .caption {{ font-size: 7.5pt; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }}
-  .meta {{ font-size: 8pt; color: #9ca3af; margin: 6px 0 12px 0; }}
-  .meta b {{ color: #e5e7eb; }}
-  .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 14px 0 6px 0; }}
+  .titulo {{ font-size: 18pt; font-weight: bold; color: #ffffff; letter-spacing: 0.3px; }}
+  .subtitulo-informe {{ font-size: 9pt; font-weight: bold; color: #2dd4bf; margin-top: 1px; }}
+  .caption {{ font-size: 7.3pt; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }}
+  .meta-bar {{ background-color: #0f172a; border: 1px solid #1e293b; border-left: 3px solid #10b981; padding: 7px 12px; font-size: 7.6pt; color: #cbd5e1; margin: 10px 0 14px 0; }}
+  .meta-bar b {{ color: #f1f5f9; }}
+  .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 16px 0 7px 0; }}
+  .section-sub {{ font-size: 7.5pt; color: #9ca3af; font-weight: normal; margin-left: 6px; }}
+  .pill {{ display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 7.5pt; }}
   table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; border: 1.5px solid #155e63; }}
   table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; }}
-  table.roster th {{ background-color: #10b981; color: #ffffff; padding: 5px 4px; text-align: center; }}
-  table.roster td {{ padding: 4px 5px; text-align: center; border-bottom: 1px solid #1e293b; background-color: #0f172a; color: #e5e7eb; }}
-  .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 10px 12px; }}
-  .ficha-nombre {{ font-size: 13pt; font-weight: bold; color: #ffffff; }}
-  .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 8px 0; }}
-  .chart-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 6px; text-align: center; }}
+  table.roster th {{ background-color: #10b981; color: #ffffff; padding: 6px 4px; text-align: center; text-transform: uppercase; letter-spacing: 0.3px; font-size: 6.8pt; }}
+  table.roster td {{ padding: 5px 5px; text-align: center; border-bottom: 1px solid #1e293b; color: #e5e7eb; }}
+  .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; border-top: 2.5px solid #10b981; padding: 11px 13px; }}
+  .ficha-nombre {{ font-size: 13.5pt; font-weight: bold; color: #ffffff; }}
+  .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 2px 0; }}
+  .chart-box {{ background-color: #0f172a; border: 1px solid #1e293b; border-top: 2.5px solid #10b981; padding: 8px; text-align: center; }}
 </style>
 </head>
 <body>
   {header_html}
-  <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
+  <div class="meta-bar">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
   <table class="kpi">
     <tr>{kpi_html}</tr>
   </table>
 
-  <div class="section-title">Monitoreo de Plantilla</div>
+  <div class="section-title">Monitoreo de Plantilla<span class="section-sub">({total_jugadores} jugadores)</span></div>
   <table class="roster">
     <thead><tr>{roster_header_html}</tr></thead>
     <tbody>{roster_rows_html}</tbody>
@@ -1241,8 +1259,12 @@ for _, row_pdf in roster.iterrows():
     disp_txt_pdf = row_pdf.get("disponibilidad", "—")
     disp_color_pdf = "#22c55e" if disp_txt_pdf == "DISPONIBLE" else "#ef4444"
     mol_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
+    mol_color_pdf = "#fb923c" if mol_txt_pdf != "Sin molestias" else "#9ca3af"
     acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
-    id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;{row_pdf.get("idJugador", "")}'
+    id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;<b>{row_pdf.get("idJugador", "")}</b>'
+    acwr_html_pdf = f'<span class="pill" style="background-color:{riesgo_color_pdf}; color:#0a0f1c;">{acwr_txt_pdf}</span>'
+    disp_html_pdf = f'<span class="pill" style="background-color:{disp_color_pdf}; color:#0a0f1c;">{disp_txt_pdf}</span>'
+    mol_html_pdf = f'<span style="color:{mol_color_pdf};">{mol_txt_pdf}</span>'
 
     if vista_key == "wellness":
         val_pdf = row_pdf.get("wellness_score")
@@ -1250,11 +1272,11 @@ for _, row_pdf in roster.iterrows():
         val_txt_pdf = f"{val_pdf:.1f}" if pd.notna(val_pdf) else "—"
         filas_roster_pdf.append([
             id_html_pdf,
-            str(row_pdf.get("nombre", "")),
+            row_pdf.get("nombre", ""),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
-            acwr_txt_pdf,
-            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
-            mol_txt_pdf,
+            acwr_html_pdf,
+            disp_html_pdf,
+            mol_html_pdf,
         ])
     else:
         val_pdf = row_pdf.get("rpe")
@@ -1264,12 +1286,12 @@ for _, row_pdf in roster.iterrows():
         rend_txt_pdf = f"{rend_pdf:.0f}" if pd.notna(rend_pdf) else "—"
         filas_roster_pdf.append([
             id_html_pdf,
-            str(row_pdf.get("nombre", "")),
+            row_pdf.get("nombre", ""),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
             rend_txt_pdf,
-            acwr_txt_pdf,
-            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
-            mol_txt_pdf,
+            acwr_html_pdf,
+            disp_html_pdf,
+            mol_html_pdf,
         ])
 
 jugador_info_pdf = None
@@ -1300,8 +1322,10 @@ if fila_jugador is not None:
     jugador_info_pdf = {
         "nombre": fila_jugador.get("nombre", ""),
         "id": jugador_sel_id,
+        "fecha": fila_jugador.get("fecha", "—"),
         "acwr": fila_jugador.get("acwr", "—"),
         "acwr_color": riesgo_color_sel_pdf,
+        "etiqueta_riesgo": ETIQUETAS_RIESGO_PDF.get(fila_jugador.get("colorRiesgo"), ""),
         "disponibilidad": disp_txt_sel_pdf,
         "disp_color": disp_color_sel_pdf,
         "molestias": mol_txt_sel_pdf,
