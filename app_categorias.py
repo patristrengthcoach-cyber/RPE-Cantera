@@ -291,6 +291,7 @@ def generar_pdf_informe(
     fig_evolucion_png,
     fig_semana_png,
     subtitulo_semana,
+    filas_molestia=None,
 ):
     """Construye un informe PDF que reproduce el aspecto visual del dashboard
     (mismos colores, tarjetas oscuras y tipografía) usando HTML + xhtml2pdf,
@@ -412,6 +413,43 @@ def generar_pdf_informe(
 
     total_jugadores = len(filas_roster)
 
+    molestias_html = ""
+    if filas_molestia is not None:
+        total_molestia = len(filas_molestia)
+        if total_molestia == 0:
+            tarjetas_mol_html = (
+                '<div style="color:#4ade80; font-weight:bold; font-size:8pt; padding:6px 2px 2px 2px;">'
+                "Ningún jugador reporta molestias activas ahora mismo.</div>"
+            )
+        else:
+            partes_mol = []
+            for f_mol in sorted(filas_molestia, key=lambda f: f["racha"], reverse=True):
+                color_racha_mol = "#facc15" if f_mol["racha"] <= 2 else "#ef4444"
+                doms_mol = f_mol.get("doms")
+                doms_txt_mol = f"{doms_mol:g}" if doms_mol is not None else "—"
+                partes_mol.append(f"""
+                <table style="width:100%; border-collapse:collapse; background-color:#0f172a; border:1px solid #1e293b;
+                    border-left:3px solid #ef4444; margin-bottom:6px;"><tr>
+                    <td style="padding:8px 10px; vertical-align:middle;">
+                        <div style="font-weight:bold; color:#f1f5f9; font-size:9pt;">[{f_mol['id']}] {f_mol['nombre']}</div>
+                        <div style="font-size:7.5pt; color:#fb923c; font-weight:bold; margin-top:2px;">&#129700; {f_mol['molestia']}</div>
+                    </td>
+                    <td width="60" style="text-align:center; vertical-align:middle; border-left:1px solid #1e293b;">
+                        <div style="font-size:6.3pt; color:#9ca3af; text-transform:uppercase;">Días</div>
+                        <div style="font-size:11pt; font-weight:bold; color:{color_racha_mol};">{f_mol['racha']}</div>
+                    </td>
+                    <td width="60" style="text-align:center; vertical-align:middle; border-left:1px solid #1e293b;">
+                        <div style="font-size:6.3pt; color:#9ca3af; text-transform:uppercase;">DOMS</div>
+                        <div style="font-size:11pt; font-weight:bold; color:{color_escala_1_5(doms_mol)};">{doms_txt_mol}</div>
+                    </td>
+                </tr></table>
+                """)
+            tarjetas_mol_html = "".join(partes_mol)
+        molestias_html = f"""
+        <div class="section-title" style="border-left-color:#ef4444;">&#9888; Molestias Activas <span class="section-sub">({total_molestia})</span></div>
+        {tarjetas_mol_html}
+        """
+
     html = f"""<!doctype html>
 <html>
 <head>
@@ -454,6 +492,7 @@ def generar_pdf_informe(
 
   {ficha_html}
   {charts_html}
+  {molestias_html}
 
   <div class="footer-nota">Informe generado automáticamente por RCF Dashboard &bull; Uso interno del cuerpo técnico</div>
 </body>
@@ -1202,6 +1241,8 @@ with st.container(border=True):
     df_chart = df_sesiones.copy()
     if mes_sel != "TODOS":
         df_chart = df_chart[df_chart["mes"] == mes_sel]
+    if semana_sel != "TODOS":
+        df_chart = df_chart[df_chart["semana"] == semana_sel]
     if df_chart.empty:
         st.caption("Sin datos de carga para este filtro.")
     else:
@@ -1213,6 +1254,8 @@ with st.container(border=True):
         else:
             resumen = df_chart.groupby(["dia_semana", "tipo"])["srpe"].mean().unstack(fill_value=0)
             subtitulo = f"Media del equipo — {CATEGORIA}"
+        if semana_sel != "TODOS":
+            subtitulo += f" · Semana: {semana_sel}"
         st.caption(f"Análisis de carga para: {subtitulo}")
         subtitulo_semana_pdf = subtitulo
         resumen = resumen.reindex(DIAS_SEMANA).fillna(0)
@@ -1374,6 +1417,7 @@ with pdf_placeholder:
                         fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
                         fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
                         subtitulo_semana=subtitulo_semana_pdf,
+                        filas_molestia=filas_molestia,
                     )
                     st.session_state["pdf_firma"] = firma_actual_pdf
                 except Exception as e_pdf:
