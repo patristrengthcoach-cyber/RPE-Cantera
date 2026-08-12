@@ -307,9 +307,16 @@ def generar_pdf_informe(
         try:
             with open("logo.png", "rb") as f_logo:
                 logo_b64 = base64.b64encode(f_logo.read()).decode("ascii")
-            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:30px; vertical-align:middle;" />'
+            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="max-height:44px; max-width:44px;" />'
         except Exception:
             logo_html = ""
+    if not logo_html:
+        # Sin escudo disponible: mostramos un emblema de reserva para que la
+        # cabecera no quede descuadrada ni vacía.
+        logo_html = (
+            '<div style="width:40px; height:40px; border:2px solid #10b981; color:#10b981; '
+            'font-weight:bold; font-size:10.5pt; text-align:center; line-height:38px;">RCF</div>'
+        )
 
     # Anchos fijos por columna usando el atributo HTML "width" (no CSS) en cada
     # celda: es lo único que este motor respeta de forma fiable. Con pocas filas
@@ -317,9 +324,10 @@ def generar_pdf_informe(
     # menor que su propio padding y reventar con ValueError.
     ancho_kpi = f"{100 / max(len(kpis), 1):.2f}%"
     kpi_html = "".join(
-        f'<td width="{ancho_kpi}" style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
+        f'<td width="{ancho_kpi}" style="text-align:center; padding:12px 6px; '
+        f'border:1px solid #1e293b; border-top:3px solid {color};">'
         f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.5px; color:#9ca3af; font-weight:bold;">{label}</div>'
-        f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:2px;">{valor}</div></td>'
+        f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:3px;">{valor}</div></td>'
         for label, valor, color in kpis
     )
 
@@ -378,23 +386,17 @@ def generar_pdf_informe(
         </div>
         """
 
-    if logo_html:
-        header_html = f"""
-        <table style="width:100%; border-collapse:collapse; margin-bottom:2px;"><tr>
-            <td style="width:44px; white-space:nowrap; padding-right:8px; vertical-align:middle;">{logo_html}</td>
-            <td style="vertical-align:middle;">
-              <div class="titulo">RACING CLUB DE FERROL</div>
-              <div class="subtitulo-informe">Informe de Rendimiento</div>
-              <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
-            </td>
-        </tr></table>
-        """
-    else:
-        header_html = f"""
-        <div class="titulo">RACING CLUB DE FERROL</div>
-        <div class="subtitulo-informe">Informe de Rendimiento</div>
-        <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
-        """
+    header_html = f"""
+    <div style="height:4px; background-color:#10b981; margin-bottom:12px;"></div>
+    <table style="width:100%; border-collapse:collapse;"><tr>
+        <td width="46" style="white-space:nowrap; padding-right:10px; vertical-align:middle;">{logo_html}</td>
+        <td style="vertical-align:middle;">
+          <div class="titulo">RACING CLUB DE FERROL</div>
+          <div class="subtitulo-informe">Informe de Rendimiento</div>
+          <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
+        </td>
+    </tr></table>
+    """
 
     charts_html = ""
     if fig_evolucion_png:
@@ -425,10 +427,11 @@ def generar_pdf_informe(
   .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 16px 0 7px 0; }}
   .section-sub {{ font-size: 7.5pt; color: #9ca3af; font-weight: normal; margin-left: 6px; }}
   .pill {{ display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 7.5pt; }}
-  table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; border: 1.5px solid #155e63; }}
-  table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; }}
+  table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; }}
+  table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; border:1px solid #1e293b; }}
   table.roster th {{ background-color: #10b981; color: #ffffff; padding: 6px 4px; text-align: center; text-transform: uppercase; letter-spacing: 0.3px; font-size: 6.8pt; }}
   table.roster td {{ padding: 5px 5px; text-align: center; border-bottom: 1px solid #1e293b; color: #e5e7eb; }}
+  .footer-nota {{ margin-top: 16px; border-top: 1px solid #1e293b; padding-top: 7px; font-size: 6.5pt; color: #6b7280; text-align: center; }}
   .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; border-top: 2.5px solid #10b981; padding: 11px 13px; }}
   .ficha-nombre {{ font-size: 13.5pt; font-weight: bold; color: #ffffff; }}
   .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 2px 0; }}
@@ -451,6 +454,8 @@ def generar_pdf_informe(
 
   {ficha_html}
   {charts_html}
+
+  <div class="footer-nota">Informe generado automáticamente por RCF Dashboard &bull; Uso interno del cuerpo técnico</div>
 </body>
 </html>"""
 
@@ -710,6 +715,7 @@ pdf_placeholder = st.container()
 if st.session_state.get("_categoria_previa") != st.session_state["categoria_key"]:
     st.session_state["_categoria_previa"] = st.session_state["categoria_key"]
     st.session_state["jugador_sel_idx"] = None
+    st.session_state["jugador_sel_borrado"] = False
 
 categoria_key = st.session_state["categoria_key"]
 CATEGORIA = CATEGORIAS[categoria_key]["label"]
@@ -920,10 +926,18 @@ with col_izq:
         st.info("Sin registros para el filtro activo.")
     else:
         indices_disponibles = roster.index.tolist()
-        if "jugador_sel_idx" not in st.session_state or st.session_state["jugador_sel_idx"] is None:
+        if "jugador_sel_idx" not in st.session_state:
+            # Primera carga: preseleccionamos al primer jugador de la lista.
             st.session_state["jugador_sel_idx"] = indices_disponibles[0]
+            st.session_state["jugador_sel_borrado"] = False
+        elif st.session_state["jugador_sel_idx"] is None:
+            # Selección borrada explícitamente (botón "Borrar"): la respetamos
+            # y NO volvemos a preseleccionar a nadie automáticamente.
+            if not st.session_state.get("jugador_sel_borrado", False):
+                st.session_state["jugador_sel_idx"] = indices_disponibles[0]
         elif st.session_state["jugador_sel_idx"] not in indices_disponibles:
             st.session_state["jugador_sel_idx"] = indices_disponibles[0]
+            st.session_state["jugador_sel_borrado"] = False
         with st.container(border=True, key="panel_monitoreo"):
             col_buscar, col_borrar = st.columns([3, 1])
             with col_buscar:
@@ -933,6 +947,7 @@ with col_izq:
             with col_borrar:
                 if st.button("✕ Borrar", use_container_width=True, key="borrar_sel"):
                     st.session_state["jugador_sel_idx"] = None
+                    st.session_state["jugador_sel_borrado"] = True
                     st.rerun()
             roster_visible = roster[roster["nombre"].str.contains(busqueda, case=False, na=False, regex=False)] if busqueda else roster
             with st.container(height=520, key="roster_scroll"):
@@ -987,6 +1002,7 @@ with col_izq:
                         else:
                             if st.button("Ver ficha →", key=f"verficha_{categoria_key}_{idx_fila}", use_container_width=True):
                                 st.session_state["jugador_sel_idx"] = idx_fila
+                                st.session_state["jugador_sel_borrado"] = False
                                 st.rerun()
         idx_sel = st.session_state["jugador_sel_idx"]
         fila_jugador = roster.loc[idx_sel] if idx_sel is not None else None
@@ -1262,8 +1278,8 @@ for _, row_pdf in roster.iterrows():
     mol_color_pdf = "#fb923c" if mol_txt_pdf != "Sin molestias" else "#9ca3af"
     acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
     id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;<b>{row_pdf.get("idJugador", "")}</b>'
-    acwr_html_pdf = f'<span class="pill" style="background-color:{riesgo_color_pdf}; color:#0a0f1c;">{acwr_txt_pdf}</span>'
-    disp_html_pdf = f'<span class="pill" style="background-color:{disp_color_pdf}; color:#0a0f1c;">{disp_txt_pdf}</span>'
+    acwr_html_pdf = f'<span style="color:{riesgo_color_pdf}; font-weight:bold;">{acwr_txt_pdf}</span>'
+    disp_html_pdf = f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>'
     mol_html_pdf = f'<span style="color:{mol_color_pdf};">{mol_txt_pdf}</span>'
 
     if vista_key == "wellness":
