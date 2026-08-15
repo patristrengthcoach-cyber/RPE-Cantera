@@ -1,5 +1,5 @@
 streamlit
 pandas
 plotly
-kaleido
+kaleido==0.2.1
 xhtml2pdf

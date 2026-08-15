@@ -263,6 +263,7 @@ def render_section_title(texto):
 
 
 RIESGO_COLOR_HEX = {"rojo": "#ef4444", "amarillo": "#facc15", "verde": "#16a34a"}
+ETIQUETAS_RIESGO_PDF = {"rojo": "Pico de Estrés (Peligro)", "amarillo": "Precaución", "verde": "Sweet Spot (Adaptación)"}
 
 
 def _dot_html(color):
@@ -290,6 +291,7 @@ def generar_pdf_informe(
     fig_evolucion_png,
     fig_semana_png,
     subtitulo_semana,
+    filas_molestia=None,
 ):
     """Construye un informe PDF que reproduce el aspecto visual del dashboard
     (mismos colores, tarjetas oscuras y tipografía) usando HTML + xhtml2pdf,
@@ -306,9 +308,16 @@ def generar_pdf_informe(
         try:
             with open("logo.png", "rb") as f_logo:
                 logo_b64 = base64.b64encode(f_logo.read()).decode("ascii")
-            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:30px; vertical-align:middle;" />'
+            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="max-height:44px; max-width:44px;" />'
         except Exception:
             logo_html = ""
+    if not logo_html:
+        # Sin escudo disponible: mostramos un emblema de reserva para que la
+        # cabecera no quede descuadrada ni vacía.
+        logo_html = (
+            '<div style="width:40px; height:40px; border:2px solid #10b981; color:#10b981; '
+            'font-weight:bold; font-size:10.5pt; text-align:center; line-height:38px;">RCF</div>'
+        )
 
     # Anchos fijos por columna usando el atributo HTML "width" (no CSS) en cada
     # celda: es lo único que este motor respeta de forma fiable. Con pocas filas
@@ -316,9 +325,10 @@ def generar_pdf_informe(
     # menor que su propio padding y reventar con ValueError.
     ancho_kpi = f"{100 / max(len(kpis), 1):.2f}%"
     kpi_html = "".join(
-        f'<td width="{ancho_kpi}" style="text-align:center; padding:10px 4px; border-right:1px solid #1e293b;">'
+        f'<td width="{ancho_kpi}" style="text-align:center; padding:12px 6px; '
+        f'border:1px solid #1e293b; border-top:3px solid {color};">'
         f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.5px; color:#9ca3af; font-weight:bold;">{label}</div>'
-        f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:2px;">{valor}</div></td>'
+        f'<div style="font-size:15pt; font-weight:bold; color:{color}; margin-top:3px;">{valor}</div></td>'
         for label, valor, color in kpis
     )
 
@@ -334,12 +344,15 @@ def generar_pdf_informe(
         f'<th width="{a}%">{c}</th>' for c, a in zip(columnas_roster, anchos_roster)
     )
     if filas_roster:
-        roster_rows_html = "".join(
-            "<tr>" + "".join(f"<td>{celda}</td>" for celda in fila) + "</tr>" for fila in filas_roster
-        )
+        filas_html_partes = []
+        for i, fila in enumerate(filas_roster):
+            bg_fila = "#0f172a" if i % 2 == 0 else "#0b1220"
+            celdas = "".join(f"<td>{celda}</td>" for celda in fila)
+            filas_html_partes.append(f'<tr style="background-color:{bg_fila};">{celdas}</tr>')
+        roster_rows_html = "".join(filas_html_partes)
     else:
         roster_rows_html = (
-            f'<tr><td colspan="{len(columnas_roster)}" style="text-align:center; color:#9ca3af; padding:10px;">'
+            f'<tr><td colspan="{len(columnas_roster)}" style="text-align:center; color:#9ca3af; padding:14px;">'
             f"Sin registros para esta selección.</td></tr>"
         )
 
@@ -348,51 +361,93 @@ def generar_pdf_informe(
         detalle_items = jugador_info.get("detalle_items", [])
         ancho_detalle = f"{100 / max(len(detalle_items), 1):.2f}%"
         detalle_html = "".join(
-            f'<td width="{ancho_detalle}" style="text-align:center; padding:6px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
-            f'<div style="font-size:6.5pt; text-transform:uppercase; color:#9ca3af; font-weight:bold;">{lab}</div>'
-            f'<div style="font-size:11pt; font-weight:bold; color:{col};">{val}</div></td>'
+            f'<td width="{ancho_detalle}" style="text-align:center; padding:7px 4px; border:1px solid #1e293b; background-color:#0b1220;">'
+            f'<div style="font-size:6.5pt; text-transform:uppercase; letter-spacing:0.3px; color:#9ca3af; font-weight:bold;">{lab}</div>'
+            f'<div style="font-size:12pt; font-weight:bold; color:{col}; margin-top:2px;">{val}</div></td>'
             for lab, val, col in detalle_items
         )
+        pill_molestias_html = ""
+        if jugador_info["molestias"] != "Sin molestias":
+            pill_molestias_html = (
+                f'<span class="pill" style="background-color:#fb923c; color:#0a0f1c; margin-left:8px;">'
+                f'&#129700; {jugador_info["molestias"]}</span>'
+            )
         ficha_html = f"""
         <div class="section-title">Ficha Individual</div>
         <div class="ficha-box">
             <div class="ficha-nombre">{jugador_info['nombre']}</div>
-            <div class="ficha-meta">
-                Código: {jugador_info['id']} &middot;
-                ACWR: <span style="color:{jugador_info['acwr_color']}; font-weight:bold;">{jugador_info['acwr']}</span> &middot;
-                Disponibilidad: <span style="color:{jugador_info['disp_color']}; font-weight:bold;">{jugador_info['disponibilidad']}</span> &middot;
-                Molestias: <span style="color:{jugador_info['mol_color']}; font-weight:bold;">{jugador_info['molestias']}</span>
+            <div class="ficha-meta">Código: {jugador_info['id']} &middot; Último registro: {jugador_info.get('fecha', '—')}</div>
+            <div style="margin:8px 0 10px 0;">
+                <span class="pill" style="background-color:{jugador_info['acwr_color']}; color:#0a0f1c;">ACWR {jugador_info['acwr']}</span>
+                <span style="color:{jugador_info['acwr_color']}; font-weight:bold; margin-left:8px; font-size:8pt;">{jugador_info.get('etiqueta_riesgo', '')}</span>
+                <span class="pill" style="background-color:{jugador_info['disp_color']}; color:#0a0f1c; margin-left:10px;">{jugador_info['disponibilidad']}</span>
+                {pill_molestias_html}
             </div>
-            <table style="width:100%; border-collapse:collapse; margin-top:6px;"><tr>{detalle_html}</tr></table>
+            <table style="width:100%; border-collapse:collapse;"><tr>{detalle_html}</tr></table>
         </div>
         """
 
-    if logo_html:
-        header_html = f"""
-        <table style="width:100%; border-collapse:collapse; margin-bottom:2px;"><tr>
-            <td style="width:44px; white-space:nowrap; padding-right:8px; vertical-align:middle;">{logo_html}</td>
-            <td style="vertical-align:middle;">
-              <div class="titulo">RACING CLUB DE FERROL</div>
-              <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
-            </td>
-        </tr></table>
-        """
-    else:
-        header_html = f"""
-        <div class="titulo">RACING CLUB DE FERROL</div>
-        <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
-        """
+    header_html = f"""
+    <div style="height:4px; background-color:#10b981; margin-bottom:12px;"></div>
+    <table style="width:100%; border-collapse:collapse;"><tr>
+        <td width="46" style="white-space:nowrap; padding-right:10px; vertical-align:middle;">{logo_html}</td>
+        <td style="vertical-align:middle;">
+          <div class="titulo">RACING CLUB DE FERROL</div>
+          <div class="subtitulo-informe">Informe de Rendimiento</div>
+          <div class="caption">DIRECCIÓN DE RENDIMIENTO Y SALUD &bull; {categoria_label.upper()}</div>
+        </td>
+    </tr></table>
+    """
 
     charts_html = ""
     if fig_evolucion_png:
         charts_html += f"""
-        <div class="section-title">Evolución de la Carga (sRPE, últimos 7 días)</div>
+        <div class="section-title">Evolución de la Carga <span class="section-sub">sRPE, últimos 7 días</span></div>
         <div class="chart-box">{_img_tag(fig_evolucion_png, "width:100%;")}</div>
         """
     if fig_semana_png:
         charts_html += f"""
-        <div class="section-title">Carga por Día de la Semana &mdash; {subtitulo_semana}</div>
+        <div class="section-title">Carga por Día de la Semana <span class="section-sub">{subtitulo_semana}</span></div>
         <div class="chart-box">{_img_tag(fig_semana_png, "width:100%;")}</div>
+        """
+
+    total_jugadores = len(filas_roster)
+
+    molestias_html = ""
+    if filas_molestia is not None:
+        total_molestia = len(filas_molestia)
+        if total_molestia == 0:
+            tarjetas_mol_html = (
+                '<div style="color:#4ade80; font-weight:bold; font-size:8pt; padding:6px 2px 2px 2px;">'
+                "Ningún jugador reporta molestias activas ahora mismo.</div>"
+            )
+        else:
+            partes_mol = []
+            for f_mol in sorted(filas_molestia, key=lambda f: f["racha"], reverse=True):
+                color_racha_mol = "#facc15" if f_mol["racha"] <= 2 else "#ef4444"
+                doms_mol = f_mol.get("doms")
+                doms_txt_mol = f"{doms_mol:g}" if doms_mol is not None else "—"
+                partes_mol.append(f"""
+                <table style="width:100%; border-collapse:collapse; background-color:#0f172a; border:1px solid #1e293b;
+                    border-left:3px solid #ef4444; margin-bottom:6px;"><tr>
+                    <td style="padding:8px 10px; vertical-align:middle;">
+                        <div style="font-weight:bold; color:#f1f5f9; font-size:9pt;">[{f_mol['id']}] {f_mol['nombre']}</div>
+                        <div style="font-size:7.5pt; color:#fb923c; font-weight:bold; margin-top:2px;">&#129700; {f_mol['molestia']}</div>
+                    </td>
+                    <td width="60" style="text-align:center; vertical-align:middle; border-left:1px solid #1e293b;">
+                        <div style="font-size:6.3pt; color:#9ca3af; text-transform:uppercase;">Días</div>
+                        <div style="font-size:11pt; font-weight:bold; color:{color_racha_mol};">{f_mol['racha']}</div>
+                    </td>
+                    <td width="60" style="text-align:center; vertical-align:middle; border-left:1px solid #1e293b;">
+                        <div style="font-size:6.3pt; color:#9ca3af; text-transform:uppercase;">DOMS</div>
+                        <div style="font-size:11pt; font-weight:bold; color:{color_escala_1_5(doms_mol)};">{doms_txt_mol}</div>
+                    </td>
+                </tr></table>
+                """)
+            tarjetas_mol_html = "".join(partes_mol)
+        molestias_html = f"""
+        <div class="section-title" style="border-left-color:#ef4444;">&#9888; Molestias Activas <span class="section-sub">({total_molestia})</span></div>
+        {tarjetas_mol_html}
         """
 
     html = f"""<!doctype html>
@@ -402,30 +457,34 @@ def generar_pdf_informe(
 <style>
   @page {{ size: A4; margin: 1.3cm; }}
   body {{ background-color: #030712; color: #e5e7eb; font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; }}
-  .titulo {{ font-size: 19pt; font-weight: bold; color: #ffffff; letter-spacing: 0.3px; }}
-  .caption {{ font-size: 7.5pt; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }}
-  .meta {{ font-size: 8pt; color: #9ca3af; margin: 6px 0 12px 0; }}
-  .meta b {{ color: #e5e7eb; }}
-  .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 14px 0 6px 0; }}
-  table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; border: 1.5px solid #155e63; }}
-  table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; }}
-  table.roster th {{ background-color: #10b981; color: #ffffff; padding: 5px 4px; text-align: center; }}
-  table.roster td {{ padding: 4px 5px; text-align: center; border-bottom: 1px solid #1e293b; background-color: #0f172a; color: #e5e7eb; }}
-  .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 10px 12px; }}
-  .ficha-nombre {{ font-size: 13pt; font-weight: bold; color: #ffffff; }}
-  .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 8px 0; }}
-  .chart-box {{ background-color: #0f172a; border: 1px solid #1e293b; padding: 6px; text-align: center; }}
+  .titulo {{ font-size: 18pt; font-weight: bold; color: #ffffff; letter-spacing: 0.3px; }}
+  .subtitulo-informe {{ font-size: 9pt; font-weight: bold; color: #2dd4bf; margin-top: 1px; }}
+  .caption {{ font-size: 7.3pt; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }}
+  .meta-bar {{ background-color: #0f172a; border: 1px solid #1e293b; border-left: 3px solid #10b981; padding: 7px 12px; font-size: 7.6pt; color: #cbd5e1; margin: 10px 0 14px 0; }}
+  .meta-bar b {{ color: #f1f5f9; }}
+  .section-title {{ font-size: 11.5pt; font-weight: bold; color: #ffffff; border-left: 3px solid #10b981; padding-left: 8px; margin: 16px 0 7px 0; }}
+  .section-sub {{ font-size: 7.5pt; color: #9ca3af; font-weight: normal; margin-left: 6px; }}
+  .pill {{ display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 7.5pt; }}
+  table.kpi {{ width: 100%; border-collapse: collapse; background-color: #0f172a; }}
+  table.roster {{ width: 100%; border-collapse: collapse; font-size: 7.3pt; border:1px solid #1e293b; }}
+  table.roster th {{ background-color: #10b981; color: #ffffff; padding: 6px 4px; text-align: center; text-transform: uppercase; letter-spacing: 0.3px; font-size: 6.8pt; }}
+  table.roster td {{ padding: 5px 5px; text-align: center; border-bottom: 1px solid #1e293b; color: #e5e7eb; }}
+  .footer-nota {{ margin-top: 16px; border-top: 1px solid #1e293b; padding-top: 7px; font-size: 6.5pt; color: #6b7280; text-align: center; }}
+  .ficha-box {{ background-color: #0f172a; border: 1px solid #1e293b; border-top: 2.5px solid #10b981; padding: 11px 13px; }}
+  .ficha-nombre {{ font-size: 13.5pt; font-weight: bold; color: #ffffff; }}
+  .ficha-meta {{ font-size: 7.5pt; color: #9ca3af; margin: 3px 0 2px 0; }}
+  .chart-box {{ background-color: #0f172a; border: 1px solid #1e293b; border-top: 2.5px solid #10b981; padding: 8px; text-align: center; }}
 </style>
 </head>
 <body>
   {header_html}
-  <div class="meta">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
+  <div class="meta-bar">Vista: <b>{vista_label}</b> &middot; Filtros: <b>{filtros_texto}</b> &middot; Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}</div>
 
   <table class="kpi">
     <tr>{kpi_html}</tr>
   </table>
 
-  <div class="section-title">Monitoreo de Plantilla</div>
+  <div class="section-title">Monitoreo de Plantilla<span class="section-sub">({total_jugadores} jugadores)</span></div>
   <table class="roster">
     <thead><tr>{roster_header_html}</tr></thead>
     <tbody>{roster_rows_html}</tbody>
@@ -433,6 +492,9 @@ def generar_pdf_informe(
 
   {ficha_html}
   {charts_html}
+  {molestias_html}
+
+  <div class="footer-nota">Informe generado automáticamente por RCF Dashboard &bull; Uso interno del cuerpo técnico</div>
 </body>
 </html>"""
 
@@ -490,9 +552,13 @@ def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
 SIN_MOLESTIA_TEXTOS = {"no", "nada", "ninguna", "ningun", "ningún", "sin molestias", ""}
 
 
-def calcular_racha_molestias(historial_jugador: pd.DataFrame):
+def calcular_racha_molestias(historial_jugador: pd.DataFrame, fecha_referencia: str = None):
     """Recorre TODOS los registros (wellness/entreno/partido) de un jugador y calcula
     cuántos días seguidos lleva reportando alguna molestia (excluyendo 'no'/'nada').
+    Solo se considera "activa" si el jugador ha vuelto a reportar en `fecha_referencia`
+    (el día más reciente con datos en la categoría): si no ha rellenado el formulario
+    ese día, o si ese día ya no marca molestia, se entiende que ya no la tiene, aunque
+    la arrastrara en días anteriores.
     Devuelve (racha_en_dias, texto_de_la_molestia_actual)."""
     por_dia = {}
     for _, r in historial_jugador.iterrows():
@@ -505,6 +571,10 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame):
             por_dia[fecha]["tiene"] = True
             por_dia[fecha]["texto"] = str(mol).strip()
     dias_ordenados = sorted(por_dia.keys(), key=lambda d: pd.to_datetime(d, dayfirst=True))
+    if not dias_ordenados:
+        return 0, "Sin molestias"
+    if fecha_referencia is not None and dias_ordenados[-1] != fecha_referencia:
+        return 0, "Sin molestias"
     racha = 0
     texto_actual = "Sin molestias"
     for fecha in reversed(dias_ordenados):
@@ -692,6 +762,7 @@ pdf_placeholder = st.container()
 if st.session_state.get("_categoria_previa") != st.session_state["categoria_key"]:
     st.session_state["_categoria_previa"] = st.session_state["categoria_key"]
     st.session_state["jugador_sel_idx"] = None
+    st.session_state["jugador_sel_borrado"] = False
 
 categoria_key = st.session_state["categoria_key"]
 CATEGORIA = CATEGORIAS[categoria_key]["label"]
@@ -902,10 +973,18 @@ with col_izq:
         st.info("Sin registros para el filtro activo.")
     else:
         indices_disponibles = roster.index.tolist()
-        if "jugador_sel_idx" not in st.session_state or st.session_state["jugador_sel_idx"] is None:
+        if "jugador_sel_idx" not in st.session_state:
+            # Primera carga: preseleccionamos al primer jugador de la lista.
             st.session_state["jugador_sel_idx"] = indices_disponibles[0]
+            st.session_state["jugador_sel_borrado"] = False
+        elif st.session_state["jugador_sel_idx"] is None:
+            # Selección borrada explícitamente (botón "Borrar"): la respetamos
+            # y NO volvemos a preseleccionar a nadie automáticamente.
+            if not st.session_state.get("jugador_sel_borrado", False):
+                st.session_state["jugador_sel_idx"] = indices_disponibles[0]
         elif st.session_state["jugador_sel_idx"] not in indices_disponibles:
             st.session_state["jugador_sel_idx"] = indices_disponibles[0]
+            st.session_state["jugador_sel_borrado"] = False
         with st.container(border=True, key="panel_monitoreo"):
             col_buscar, col_borrar = st.columns([3, 1])
             with col_buscar:
@@ -915,6 +994,7 @@ with col_izq:
             with col_borrar:
                 if st.button("✕ Borrar", use_container_width=True, key="borrar_sel"):
                     st.session_state["jugador_sel_idx"] = None
+                    st.session_state["jugador_sel_borrado"] = True
                     st.rerun()
             roster_visible = roster[roster["nombre"].str.contains(busqueda, case=False, na=False, regex=False)] if busqueda else roster
             with st.container(height=520, key="roster_scroll"):
@@ -969,6 +1049,7 @@ with col_izq:
                         else:
                             if st.button("Ver ficha →", key=f"verficha_{categoria_key}_{idx_fila}", use_container_width=True):
                                 st.session_state["jugador_sel_idx"] = idx_fila
+                                st.session_state["jugador_sel_borrado"] = False
                                 st.rerun()
         idx_sel = st.session_state["jugador_sel_idx"]
         fila_jugador = roster.loc[idx_sel] if idx_sel is not None else None
@@ -977,10 +1058,11 @@ with col_izq:
     # ============================================================
     # MOLESTIAS — jugadores con dolor persistente (independiente de los filtros de arriba)
     # ============================================================
+    fecha_ref_molestias = timestamp_ref.strftime("%d/%m/%Y") if pd.notna(timestamp_ref) else None
     filas_molestia = []
     for id_j in df["idJugador"].unique():
         hist_jugador = df[df["idJugador"] == id_j].sort_values("timestamp")
-        racha, texto_mol = calcular_racha_molestias(hist_jugador)
+        racha, texto_mol = calcular_racha_molestias(hist_jugador, fecha_referencia=fecha_ref_molestias)
         if racha > 0:
             nombre_j = hist_jugador.iloc[-1]["nombre"]
             if "doms" in hist_jugador.columns:
@@ -1168,6 +1250,8 @@ with st.container(border=True):
     df_chart = df_sesiones.copy()
     if mes_sel != "TODOS":
         df_chart = df_chart[df_chart["mes"] == mes_sel]
+    if semana_sel != "TODOS":
+        df_chart = df_chart[df_chart["semana"] == semana_sel]
     if df_chart.empty:
         st.caption("Sin datos de carga para este filtro.")
     else:
@@ -1179,6 +1263,8 @@ with st.container(border=True):
         else:
             resumen = df_chart.groupby(["dia_semana", "tipo"])["srpe"].mean().unstack(fill_value=0)
             subtitulo = f"Media del equipo — {CATEGORIA}"
+        if semana_sel != "TODOS":
+            subtitulo += f" · Semana: {semana_sel}"
         st.caption(f"Análisis de carga para: {subtitulo}")
         subtitulo_semana_pdf = subtitulo
         resumen = resumen.reindex(DIAS_SEMANA).fillna(0)
@@ -1241,8 +1327,12 @@ for _, row_pdf in roster.iterrows():
     disp_txt_pdf = row_pdf.get("disponibilidad", "—")
     disp_color_pdf = "#22c55e" if disp_txt_pdf == "DISPONIBLE" else "#ef4444"
     mol_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
+    mol_color_pdf = "#fb923c" if mol_txt_pdf != "Sin molestias" else "#9ca3af"
     acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
-    id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;{row_pdf.get("idJugador", "")}'
+    id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;<b>{row_pdf.get("idJugador", "")}</b>'
+    acwr_html_pdf = f'<span style="color:{riesgo_color_pdf}; font-weight:bold;">{acwr_txt_pdf}</span>'
+    disp_html_pdf = f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>'
+    mol_html_pdf = f'<span style="color:{mol_color_pdf};">{mol_txt_pdf}</span>'
 
     if vista_key == "wellness":
         val_pdf = row_pdf.get("wellness_score")
@@ -1250,11 +1340,11 @@ for _, row_pdf in roster.iterrows():
         val_txt_pdf = f"{val_pdf:.1f}" if pd.notna(val_pdf) else "—"
         filas_roster_pdf.append([
             id_html_pdf,
-            str(row_pdf.get("nombre", "")),
+            row_pdf.get("nombre", ""),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
-            acwr_txt_pdf,
-            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
-            mol_txt_pdf,
+            acwr_html_pdf,
+            disp_html_pdf,
+            mol_html_pdf,
         ])
     else:
         val_pdf = row_pdf.get("rpe")
@@ -1264,12 +1354,12 @@ for _, row_pdf in roster.iterrows():
         rend_txt_pdf = f"{rend_pdf:.0f}" if pd.notna(rend_pdf) else "—"
         filas_roster_pdf.append([
             id_html_pdf,
-            str(row_pdf.get("nombre", "")),
+            row_pdf.get("nombre", ""),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
             rend_txt_pdf,
-            acwr_txt_pdf,
-            f'<span style="color:{disp_color_pdf}; font-weight:bold;">{disp_txt_pdf}</span>',
-            mol_txt_pdf,
+            acwr_html_pdf,
+            disp_html_pdf,
+            mol_html_pdf,
         ])
 
 jugador_info_pdf = None
@@ -1300,8 +1390,10 @@ if fila_jugador is not None:
     jugador_info_pdf = {
         "nombre": fila_jugador.get("nombre", ""),
         "id": jugador_sel_id,
+        "fecha": fila_jugador.get("fecha", "—"),
         "acwr": fila_jugador.get("acwr", "—"),
         "acwr_color": riesgo_color_sel_pdf,
+        "etiqueta_riesgo": ETIQUETAS_RIESGO_PDF.get(fila_jugador.get("colorRiesgo"), ""),
         "disponibilidad": disp_txt_sel_pdf,
         "disp_color": disp_color_sel_pdf,
         "molestias": mol_txt_sel_pdf,
@@ -1323,6 +1415,8 @@ with pdf_placeholder:
         if st.button("📄 Generar informe PDF", use_container_width=True, key="btn_generar_pdf"):
             with st.spinner("Generando informe PDF..."):
                 try:
+                    png_evolucion = _fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None
+                    png_semana = _fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None
                     st.session_state["pdf_bytes"] = generar_pdf_informe(
                         categoria_label=CATEGORIA,
                         vista_label=vista_label_pdf,
@@ -1331,11 +1425,21 @@ with pdf_placeholder:
                         columnas_roster=columnas_roster_pdf,
                         filas_roster=filas_roster_pdf,
                         jugador_info=jugador_info_pdf,
-                        fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
-                        fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
+                        fig_evolucion_png=png_evolucion,
+                        fig_semana_png=png_semana,
                         subtitulo_semana=subtitulo_semana_pdf,
+                        filas_molestia=filas_molestia,
                     )
                     st.session_state["pdf_firma"] = firma_actual_pdf
+                    faltan_graficos = (
+                        (fig_evolucion_individual is not None and png_evolucion is None)
+                        or (fig_semana is not None and png_semana is None)
+                    )
+                    if faltan_graficos:
+                        st.warning(
+                            "⚠️ El PDF se generó pero algún gráfico no se pudo convertir a imagen "
+                            "(revisa que 'kaleido' esté instalado correctamente en el despliegue)."
+                        )
                 except Exception as e_pdf:
                     st.session_state["pdf_bytes"] = None
                     st.error("❌ No se pudo generar el PDF.")

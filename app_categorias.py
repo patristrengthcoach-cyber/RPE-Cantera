@@ -552,9 +552,13 @@ def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
 SIN_MOLESTIA_TEXTOS = {"no", "nada", "ninguna", "ningun", "ningún", "sin molestias", ""}
 
 
-def calcular_racha_molestias(historial_jugador: pd.DataFrame):
+def calcular_racha_molestias(historial_jugador: pd.DataFrame, fecha_referencia: str = None):
     """Recorre TODOS los registros (wellness/entreno/partido) de un jugador y calcula
     cuántos días seguidos lleva reportando alguna molestia (excluyendo 'no'/'nada').
+    Solo se considera "activa" si el jugador ha vuelto a reportar en `fecha_referencia`
+    (el día más reciente con datos en la categoría): si no ha rellenado el formulario
+    ese día, o si ese día ya no marca molestia, se entiende que ya no la tiene, aunque
+    la arrastrara en días anteriores.
     Devuelve (racha_en_dias, texto_de_la_molestia_actual)."""
     por_dia = {}
     for _, r in historial_jugador.iterrows():
@@ -567,6 +571,10 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame):
             por_dia[fecha]["tiene"] = True
             por_dia[fecha]["texto"] = str(mol).strip()
     dias_ordenados = sorted(por_dia.keys(), key=lambda d: pd.to_datetime(d, dayfirst=True))
+    if not dias_ordenados:
+        return 0, "Sin molestias"
+    if fecha_referencia is not None and dias_ordenados[-1] != fecha_referencia:
+        return 0, "Sin molestias"
     racha = 0
     texto_actual = "Sin molestias"
     for fecha in reversed(dias_ordenados):
@@ -1050,10 +1058,11 @@ with col_izq:
     # ============================================================
     # MOLESTIAS — jugadores con dolor persistente (independiente de los filtros de arriba)
     # ============================================================
+    fecha_ref_molestias = timestamp_ref.strftime("%d/%m/%Y") if pd.notna(timestamp_ref) else None
     filas_molestia = []
     for id_j in df["idJugador"].unique():
         hist_jugador = df[df["idJugador"] == id_j].sort_values("timestamp")
-        racha, texto_mol = calcular_racha_molestias(hist_jugador)
+        racha, texto_mol = calcular_racha_molestias(hist_jugador, fecha_referencia=fecha_ref_molestias)
         if racha > 0:
             nombre_j = hist_jugador.iloc[-1]["nombre"]
             if "doms" in hist_jugador.columns:
@@ -1406,6 +1415,8 @@ with pdf_placeholder:
         if st.button("📄 Generar informe PDF", use_container_width=True, key="btn_generar_pdf"):
             with st.spinner("Generando informe PDF..."):
                 try:
+                    png_evolucion = _fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None
+                    png_semana = _fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None
                     st.session_state["pdf_bytes"] = generar_pdf_informe(
                         categoria_label=CATEGORIA,
                         vista_label=vista_label_pdf,
@@ -1414,12 +1425,21 @@ with pdf_placeholder:
                         columnas_roster=columnas_roster_pdf,
                         filas_roster=filas_roster_pdf,
                         jugador_info=jugador_info_pdf,
-                        fig_evolucion_png=_fig_a_imagen_bytes(fig_evolucion_individual) if fig_evolucion_individual is not None else None,
-                        fig_semana_png=_fig_a_imagen_bytes(fig_semana) if fig_semana is not None else None,
+                        fig_evolucion_png=png_evolucion,
+                        fig_semana_png=png_semana,
                         subtitulo_semana=subtitulo_semana_pdf,
                         filas_molestia=filas_molestia,
                     )
                     st.session_state["pdf_firma"] = firma_actual_pdf
+                    faltan_graficos = (
+                        (fig_evolucion_individual is not None and png_evolucion is None)
+                        or (fig_semana is not None and png_semana is None)
+                    )
+                    if faltan_graficos:
+                        st.warning(
+                            "⚠️ El PDF se generó pero algún gráfico no se pudo convertir a imagen "
+                            "(revisa que 'kaleido' esté instalado correctamente en el despliegue)."
+                        )
                 except Exception as e_pdf:
                     st.session_state["pdf_bytes"] = None
                     st.error("❌ No se pudo generar el PDF.")
