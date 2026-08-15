@@ -552,13 +552,15 @@ def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
 SIN_MOLESTIA_TEXTOS = {"no", "nada", "ninguna", "ningun", "ningún", "sin molestias", ""}
 
 
-def calcular_racha_molestias(historial_jugador: pd.DataFrame, fecha_referencia: str = None):
+def calcular_racha_molestias(historial_jugador: pd.DataFrame, fechas_referencia=None):
     """Recorre TODOS los registros (wellness/entreno/partido) de un jugador y calcula
     cuántos días seguidos lleva reportando alguna molestia (excluyendo 'no'/'nada').
-    Solo se considera "activa" si el jugador ha vuelto a reportar en `fecha_referencia`
-    (el día más reciente con datos en la categoría): si no ha rellenado el formulario
-    ese día, o si ese día ya no marca molestia, se entiende que ya no la tiene, aunque
-    la arrastrara en días anteriores.
+    Solo se considera "activa" si el jugador ha vuelto a reportar en alguna de las
+    `fechas_referencia` (normalmente: el día con más actividad de la categoría y el
+    día real de hoy — se aceptan ambas para no perder molestias de un partido de hoy
+    si algún otro registro suelto desajusta cuál es "el último día con datos"):
+    si no ha rellenado el formulario ese día, o si ese día ya no marca molestia, se
+    entiende que ya no la tiene, aunque la arrastrara en días anteriores.
     Devuelve (racha_en_dias, texto_de_la_molestia_actual)."""
     por_dia = {}
     for _, r in historial_jugador.iterrows():
@@ -573,7 +575,7 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame, fecha_referencia: 
     dias_ordenados = sorted(por_dia.keys(), key=lambda d: pd.to_datetime(d, dayfirst=True))
     if not dias_ordenados:
         return 0, "Sin molestias"
-    if fecha_referencia is not None and dias_ordenados[-1] != fecha_referencia:
+    if fechas_referencia and dias_ordenados[-1] not in fechas_referencia:
         return 0, "Sin molestias"
     racha = 0
     texto_actual = "Sin molestias"
@@ -1058,11 +1060,13 @@ with col_izq:
     # ============================================================
     # MOLESTIAS — jugadores con dolor persistente (independiente de los filtros de arriba)
     # ============================================================
-    fecha_ref_molestias = timestamp_ref.strftime("%d/%m/%Y") if pd.notna(timestamp_ref) else None
+    fecha_max_datos = timestamp_ref.strftime("%d/%m/%Y") if pd.notna(timestamp_ref) else None
+    fecha_hoy_real = pd.Timestamp.now().strftime("%d/%m/%Y")
+    fechas_ref_molestias = {f for f in [fecha_max_datos, fecha_hoy_real] if f is not None}
     filas_molestia = []
     for id_j in df["idJugador"].unique():
         hist_jugador = df[df["idJugador"] == id_j].sort_values("timestamp")
-        racha, texto_mol = calcular_racha_molestias(hist_jugador, fecha_referencia=fecha_ref_molestias)
+        racha, texto_mol = calcular_racha_molestias(hist_jugador, fechas_referencia=fechas_ref_molestias)
         if racha > 0:
             nombre_j = hist_jugador.iloc[-1]["nombre"]
             if "doms" in hist_jugador.columns:
