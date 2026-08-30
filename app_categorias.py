@@ -56,6 +56,18 @@ COLS_SOLO_RPE = {
     "rpe_partido": 6, "molestia_partido": 7, "rendimiento_partido": 8,
 }
 
+# CADETE FEMENINO tiene la pregunta del período (como SENIOR_FEM) pero NO tiene
+# la pregunta de DOMS, así que el resto de columnas se desplaza una posición
+# respecto a COLS_CON_PERIODO.
+COLS_CON_PERIODO_SIN_DOMS = {
+    "timestamp": 0, "id_nombre": 1, "tipo": 2,
+    "fatiga": 3, "sueno": 4, "orina": 5, "estres": 6,
+    "molestia_manana": 7, "periodo": 8,
+    "disponible": 9,
+    "rpe_entreno": 10, "molestia_entreno": 11, "rendimiento_entreno": 12,
+    "rpe_partido": 13, "molestia_partido": 14, "rendimiento_partido": 15,
+}
+
 # ID del Sheet maestro: "CANTERA Wellness RPE RCF 26/27 (respuestas)"
 # (pestañas: Senior Femenino, Infantil B, Infantil A, Cadete B, Cadete A, Juvenil B)
 MASTER_SHEET_ID = "16yX64C2mFz8UCBCtOvZ_gIJX8rqLPvNt0kkjpLIyikc"
@@ -101,6 +113,16 @@ CATEGORIAS = {
         "label": "Senior Femenino",
         "csv_url": _csv_url_por_hoja(MASTER_SHEET_ID, "Senior Femenino"),
         "cols": COLS_CON_PERIODO,
+    },
+    "cadete_fem": {
+        "label": "Cadete Femenino",
+        "csv_url": _csv_url_por_hoja(MASTER_SHEET_ID, "Cadete Femenino"),
+        "cols": COLS_CON_PERIODO_SIN_DOMS,
+    },
+    "infantil_fem": {
+        "label": "Infantil Femenino",
+        "csv_url": _csv_url_por_hoja(MASTER_SHEET_ID, "Infantil Femenino"),
+        "cols": COLS_SOLO_RPE,
     },
 }
 
@@ -616,7 +638,7 @@ def procesar_registros(df_raw: pd.DataFrame, cols: dict):
         if not id_j:
             continue
         tipo_raw = str(valor(row, cols["tipo"]) or "").strip().upper()
-        if "WELLNESS" in tipo_raw:
+        if "WELLNESS" in tipo_raw or "LEVANTARME" in tipo_raw:
             tipo = "WELLNESS"
         elif "ENTREN" in tipo_raw:
             tipo = "ENTRENO"
@@ -639,7 +661,7 @@ def procesar_registros(df_raw: pd.DataFrame, cols: dict):
             fila["sueno"] = a_float(valor(row, cols["sueno"]))
             fila["orina"] = a_float(valor(row, cols["orina"]))
             fila["estres"] = a_float(valor(row, cols["estres"]))
-            fila["doms"] = a_float(valor(row, cols["doms"]))
+            fila["doms"] = a_float(valor(row, cols["doms"])) if "doms" in cols else None
             if "periodo" in cols:
                 periodo_raw = valor(row, cols["periodo"])
                 fila["periodo"] = str(periodo_raw).strip() if periodo_raw not in (None, "") else None

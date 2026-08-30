@@ -10,6 +10,8 @@ Dashboard en Streamlit para el monitoreo de rendimiento, wellness y carga de ent
 - Infantil A
 - Infantil B
 - Senior Femenino
+- Cadete Femenino
+- Infantil Femenino
 
 Cada categoría se selecciona desde un desplegable en la app. Los datos se leen en tiempo real desde el Google Sheet de respuestas del formulario ("CANTERA Wellness RPE RCF 26/27"), una pestaña por categoría.
 
@@ -37,7 +39,10 @@ El formulario tiene 3 variantes según la categoría, definidas en `app_categori
 
 - `COLS_ESTANDAR`: Cadete A, Cadete B, Juvenil B (16 columnas, incluye wellness matutino + disponibilidad + RPE entreno/partido).
 - `COLS_CON_PERIODO`: Senior Femenino (17 columnas, añade la pregunta del período entre DOMS y disponibilidad).
-- `COLS_SOLO_RPE`: Infantil A, Infantil B (9 columnas, sin preguntas de wellness matutino, solo RPE post-sesión/partido).
+- `COLS_CON_PERIODO_SIN_DOMS`: Cadete Femenino (16 columnas, como `COLS_CON_PERIODO` pero sin la pregunta de DOMS).
+- `COLS_SOLO_RPE`: Infantil A, Infantil B, Infantil Femenino (9 columnas, sin preguntas de wellness matutino, solo RPE post-sesión/partido).
+
+> Nota: el formulario de las categorías femeninas más recientes (Cadete Femenino, Infantil Femenino) usa etiquetas distintas en la pregunta "¿Cuándo respondes?": "Levantarme por la mañana" / "Sesión de ENTRENAMIENTO" / "COMPETICION / PARTIDO", en vez de los literales "WELLNESS" / "ENTRENAMIENTO" / "COMPETICION" de las categorías más antiguas. El código ya reconoce ambas variantes.
 
 ## Añadir una nueva categoría
 
