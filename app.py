@@ -294,10 +294,14 @@ def _dot_html(color):
 
 
 def _fig_a_imagen_bytes(fig, width=1000, height=420, scale=2):
-    """Exporta una figura de Plotly a PNG conservando su estilo oscuro original
-    (fondo transparente), para que encaje visualmente con las tarjetas del PDF."""
+    """Exporta una figura de Plotly a PNG para el informe. Se fuerza un fondo
+    sólido (no transparente) porque el motor del PDF (xhtml2pdf/reportlab) no
+    compone bien el canal alfa: un PNG con fondo transparente puede pintarse
+    en negro dentro del informe."""
     try:
-        return fig.to_image(format="png", width=width, height=height, scale=scale)
+        fig_export = go.Figure(fig)
+        fig_export.update_layout(paper_bgcolor="#0f172a", plot_bgcolor="#0f172a")
+        return fig_export.to_image(format="png", width=width, height=height, scale=scale)
     except Exception:
         return None
 
@@ -319,11 +323,13 @@ def generar_pdf_informe(
     (mismos colores, tarjetas oscuras y tipografía) usando HTML + xhtml2pdf,
     en vez de un documento de tablas genéricas."""
 
-    def _img_tag(png_bytes, css=""):
+    def _img_tag(png_bytes, ancho="100%"):
         if not png_bytes:
             return ""
         b64 = base64.b64encode(png_bytes).decode("ascii")
-        return f'<img src="data:image/png;base64,{b64}" style="{css}" />'
+        # xhtml2pdf no respeta de forma fiable un ancho en % puesto en CSS (mismo
+        # problema ya visto con las tablas); el atributo HTML "width" sí funciona.
+        return f'<img src="data:image/png;base64,{b64}" width="{ancho}" />'
 
     logo_html = ""
     if os.path.exists("logo.png"):
@@ -425,12 +431,12 @@ def generar_pdf_informe(
     if fig_evolucion_png:
         charts_html += f"""
         <div class="section-title">Evolución de la Carga <span class="section-sub">sRPE, últimos 7 días</span></div>
-        <div class="chart-box">{_img_tag(fig_evolucion_png, "width:100%;")}</div>
+        <div class="chart-box">{_img_tag(fig_evolucion_png)}</div>
         """
     if fig_semana_png:
         charts_html += f"""
         <div class="section-title">Carga por Día de la Semana <span class="section-sub">{subtitulo_semana}</span></div>
-        <div class="chart-box">{_img_tag(fig_semana_png, "width:100%;")}</div>
+        <div class="chart-box">{_img_tag(fig_semana_png)}</div>
         """
 
     total_jugadores = len(filas_roster)
@@ -446,15 +452,16 @@ def generar_pdf_informe(
         else:
             partes_mol = []
             for f_mol in sorted(filas_molestia, key=lambda f: f["racha"], reverse=True):
-                color_racha_mol = "#facc15" if f_mol["racha"] <= 2 else "#ef4444"
+                color_racha_mol = color_severidad_molestia(f_mol["racha"])
                 doms_mol = f_mol.get("doms")
                 doms_txt_mol = f"{doms_mol:g}" if doms_mol is not None else "—"
+                borde_izq_mol = "#ef4444" if f_mol["racha"] >= 3 else "#fb923c"
                 partes_mol.append(f"""
                 <table style="width:100%; border-collapse:collapse; background-color:#0f172a; border:1px solid #1e293b;
-                    border-left:3px solid #ef4444; margin-bottom:6px;"><tr>
+                    border-left:3px solid {borde_izq_mol}; margin-bottom:6px;"><tr>
                     <td style="padding:8px 10px; vertical-align:middle;">
                         <div style="font-weight:bold; color:#f1f5f9; font-size:9pt;">[{f_mol['id']}] {f_mol['nombre']}</div>
-                        <div style="font-size:7.5pt; color:#fb923c; font-weight:bold; margin-top:2px;">&#129700; {f_mol['molestia']}</div>
+                        <div style="font-size:7.5pt; color:{color_racha_mol}; font-weight:bold; margin-top:2px;">&#129700; {f_mol['molestia']}</div>
                     </td>
                     <td width="60" style="text-align:center; vertical-align:middle; border-left:1px solid #1e293b;">
                         <div style="font-size:6.3pt; color:#9ca3af; text-transform:uppercase;">Días</div>
@@ -534,18 +541,33 @@ def _minutos_partido_file(categoria_key):
     return f"minutos_partido_por_jugador_{categoria_key}.json"
 
 
-def cargar_minutos_entreno_guardado(categoria_key):
+MINUTOS_ENTRENO_DEFECTO = 75
+
+
+def cargar_minutos_entreno_guardados(categoria_key):
+    """Devuelve un diccionario {'fecha': minutos} con los minutos de entreno
+    guardados para cada DÍA de esta categoría (cada día puede durar distinto,
+    ya no es un único valor global para toda la categoría)."""
     try:
         with open(_minutos_entreno_file(categoria_key), "r") as f:
-            return int(json.load(f).get("entreno", 75))
+            datos = json.load(f)
+        if not isinstance(datos, dict) or ("entreno" in datos and len(datos) == 1):
+            # Formato antiguo (un único valor global) o archivo inválido: se
+            # empieza de cero con el nuevo formato por día.
+            return {}
+        return {k: int(v) for k, v in datos.items()}
     except Exception:
-        return 75
+        return {}
 
 
-def guardar_minutos_entreno_en_disco(categoria_key, entreno):
+def guardar_minutos_entreno_en_disco(categoria_key, fecha, minutos):
+    """Guarda los minutos de entreno SOLO para el día `fecha` indicado, sin
+    afectar a los minutos guardados de otros días de la misma categoría."""
+    datos = cargar_minutos_entreno_guardados(categoria_key)
+    datos[fecha] = minutos
     try:
         with open(_minutos_entreno_file(categoria_key), "w") as f:
-            json.dump({"entreno": entreno}, f)
+            json.dump(datos, f)
         return True
     except Exception:
         return False
@@ -610,6 +632,12 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame, fechas_referencia=
         else:
             break
     return racha, texto_actual
+
+
+def color_severidad_molestia(racha: int) -> str:
+    """Color de una molestia según cuántos días seguidos lleva activa: naranja
+    si es reciente (1-2 días), rojo si ya persiste 3 días seguidos o más."""
+    return "#ef4444" if racha and racha >= 3 else "#fb923c"
 
 
 def ordenar_semanas_desc(semanas):
@@ -804,12 +832,16 @@ if df.empty:
     st.stop()
 
 # ============================================================
-# VISTA (botones resaltados) + MINUTOS DE ENTRENO (global, con guardado)
+# VISTA (botones resaltados) + MINUTOS DE ENTRENO (por día, con guardado)
 # ============================================================
 if "vista_key" not in st.session_state:
     st.session_state["vista_key"] = "wellness"
 
-minutos_guardados_entreno = cargar_minutos_entreno_guardado(categoria_key)
+minutos_entreno_guardados = cargar_minutos_entreno_guardados(categoria_key)
+dias_entreno_disponibles = sorted(
+    df.loc[df["tipo"] == "ENTRENO", "fecha"].unique(),
+    key=lambda d: pd.to_datetime(d, dayfirst=True), reverse=True,
+)
 
 col_vista, col_min = st.columns([2, 1])
 with col_vista:
@@ -833,24 +865,42 @@ with col_vista:
             st.session_state["vista_key"] = "rpe_partido"
             st.rerun()
 with col_min:
-    cmin1, cmin2 = st.columns([1, 0.4])
-    with cmin1:
-        minutos_entreno = st.number_input(
-            "Min. Entreno (equipo)", min_value=1, value=minutos_guardados_entreno, step=5,
-            key=f"min_entreno_input_{categoria_key}",
-        )
-    with cmin2:
-        st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
-        if st.button("💾", help="Guardar minutos de entreno para próximas visitas", key=f"guardar_min_entreno_{categoria_key}"):
-            if guardar_minutos_entreno_en_disco(categoria_key, minutos_entreno):
-                st.toast("Minutos de entreno guardados ✅")
-            else:
-                st.toast("No se pudo guardar ❌")
+    if not dias_entreno_disponibles:
+        st.caption("Sin sesiones de entreno registradas todavía.")
+    else:
+        cmin_dia, cmin_val, cmin_btn = st.columns([1.1, 1, 0.5])
+        with cmin_dia:
+            dia_min_entreno = st.selectbox(
+                "Día de entreno", dias_entreno_disponibles,
+                key=f"dia_min_entreno_{categoria_key}",
+            )
+        with cmin_val:
+            valor_previo_min_entreno = minutos_entreno_guardados.get(dia_min_entreno, MINUTOS_ENTRENO_DEFECTO)
+            minutos_entreno_input = st.number_input(
+                "Min. ese día", min_value=1, value=valor_previo_min_entreno, step=5,
+                # La key incluye el día para que, al cambiar de día en el desplegable,
+                # el campo muestre SIEMPRE los minutos guardados de ESE día (y no
+                # arrastre el valor que hubiera para otro día distinto).
+                key=f"min_entreno_input_{categoria_key}_{dia_min_entreno}",
+            )
+        with cmin_btn:
+            st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+            if st.button(
+                "💾", help=f"Guardar minutos de entreno SOLO para el {dia_min_entreno}",
+                key=f"guardar_min_entreno_{categoria_key}_{dia_min_entreno}",
+            ):
+                if guardar_minutos_entreno_en_disco(categoria_key, dia_min_entreno, minutos_entreno_input):
+                    st.toast(f"Minutos guardados para el {dia_min_entreno} ✅")
+                    st.rerun()
+                else:
+                    st.toast("No se pudo guardar ❌")
 
 vista_key = st.session_state["vista_key"]
 minutos_partido_guardados = cargar_minutos_partido_guardados(categoria_key)
 
-# calcular sRPE: entreno usa minutos globales, partido usa minutos guardados por jugador+partido
+# calcular sRPE: entreno usa los minutos guardados de CADA día (si un día no
+# tiene minutos guardados, se usa un valor por defecto), partido usa minutos
+# guardados por jugador+partido.
 df_sesiones_todas = df[df["tipo"].isin(["ENTRENO", "PARTIDO"])].copy()
 
 
@@ -858,7 +908,8 @@ def _calcular_srpe(r):
     if r["rpe"] is None:
         return None
     if r["tipo"] == "ENTRENO":
-        return r["rpe"] * minutos_entreno
+        mins_dia = minutos_entreno_guardados.get(r["fecha"], MINUTOS_ENTRENO_DEFECTO)
+        return r["rpe"] * mins_dia
     mins = minutos_partido_guardados.get(f"{r['idJugador']}|{r['fecha']}")
     return None if mins is None else r["rpe"] * mins
 
@@ -1052,7 +1103,8 @@ with col_izq:
                                 etiqueta_dia = "RPE"
                                 val_txt = f"{val_dia:g}" if val_dia is not None else "—"
                                 if vista_key == "rpe_entreno":
-                                    val_txt += f" · {minutos_entreno} min"
+                                    mins_fila = minutos_entreno_guardados.get(row["fecha"], MINUTOS_ENTRENO_DEFECTO)
+                                    val_txt += f" · {mins_fila} min"
                                 elif vista_key == "rpe_partido":
                                     mins_tarjeta = minutos_partido_guardados.get(f"{row['idJugador']}|{row['fecha']}")
                                     if mins_tarjeta is not None:
@@ -1086,9 +1138,11 @@ with col_izq:
     fecha_hoy_real = pd.Timestamp.now().strftime("%d/%m/%Y")
     fechas_ref_molestias = {f for f in [fecha_max_datos, fecha_hoy_real] if f is not None}
     filas_molestia = []
+    racha_por_jugador = {}
     for id_j in df["idJugador"].unique():
         hist_jugador = df[df["idJugador"] == id_j].sort_values("timestamp")
         racha, texto_mol = calcular_racha_molestias(hist_jugador, fechas_referencia=fechas_ref_molestias)
+        racha_por_jugador[id_j] = racha
         if racha > 0:
             nombre_j = hist_jugador.iloc[-1]["nombre"]
             if "doms" in hist_jugador.columns:
@@ -1112,10 +1166,11 @@ with col_izq:
                 with st.container(border=True):
                     mc1, mc2, mc3 = st.columns([3, 1.3, 1.3])
                     with mc1:
+                        color_texto_mol = color_severidad_molestia(f["racha"])
                         st.markdown(f"<div style='font-weight:800; color:#f1f5f9; font-size:1.1rem;'>[{f['id']}] {f['nombre']}</div>", unsafe_allow_html=True)
-                        st.markdown(f"<div style='font-size:0.9rem; color:#fb923c; font-weight:600; margin-top:2px;'>🩹 {f['molestia']}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='font-size:0.9rem; color:{color_texto_mol}; font-weight:600; margin-top:2px;'>🩹 {f['molestia']}</div>", unsafe_allow_html=True)
                     with mc2:
-                        color_racha = "#facc15" if f["racha"] <= 2 else "#ef4444"
+                        color_racha = color_severidad_molestia(f["racha"])
                         render_kpi("Días seguidos", f["racha"], color_racha)
                     with mc3:
                         render_kpi("DOMS", f["doms"] if f["doms"] is not None else "—", color_escala_1_5(f["doms"]))
@@ -1134,7 +1189,8 @@ with col_der:
             )
             extra_min = ""
             if vista_key == "rpe_entreno":
-                extra_min = f" · {minutos_entreno} min"
+                mins_ficha_entreno = minutos_entreno_guardados.get(fila_jugador["fecha"], MINUTOS_ENTRENO_DEFECTO)
+                extra_min = f" · {mins_ficha_entreno} min"
             elif vista_key == "rpe_partido":
                 mins_ficha = minutos_partido_guardados.get(f"{jugador_sel_id}|{fila_jugador['fecha']}")
                 if mins_ficha is not None:
@@ -1151,7 +1207,7 @@ with col_der:
                 render_kpi("Disponibilidad", fila_jugador["disponibilidad"], color_disp)
             with c2:
                 mol_val = fila_jugador["molestias_estado"]
-                color_mol = "#fb923c" if mol_val and mol_val != "Sin molestias" else "#9ca3af"
+                color_mol = color_severidad_molestia(racha_por_jugador.get(jugador_sel_id, 0)) if mol_val and mol_val != "Sin molestias" else "#9ca3af"
                 render_kpi("Molestias", mol_val, color_mol)
         if vista_key == "wellness":
             st.markdown("**Detalle Wellness de hoy**")
@@ -1353,7 +1409,10 @@ for _, row_pdf in roster.iterrows():
     disp_txt_pdf = row_pdf.get("disponibilidad", "—")
     disp_color_pdf = "#22c55e" if disp_txt_pdf == "DISPONIBLE" else "#ef4444"
     mol_txt_pdf = row_pdf.get("molestias_estado") or "Sin molestias"
-    mol_color_pdf = "#fb923c" if mol_txt_pdf != "Sin molestias" else "#9ca3af"
+    mol_color_pdf = (
+        color_severidad_molestia(racha_por_jugador.get(row_pdf.get("idJugador"), 0))
+        if mol_txt_pdf != "Sin molestias" else "#9ca3af"
+    )
     acwr_txt_pdf = str(row_pdf.get("acwr", "—"))
     id_html_pdf = f'{_dot_html(riesgo_color_pdf)}&nbsp;<b>{row_pdf.get("idJugador", "")}</b>'
     acwr_html_pdf = f'<span style="color:{riesgo_color_pdf}; font-weight:bold;">{acwr_txt_pdf}</span>'
@@ -1423,7 +1482,10 @@ if fila_jugador is not None:
         "disponibilidad": disp_txt_sel_pdf,
         "disp_color": disp_color_sel_pdf,
         "molestias": mol_txt_sel_pdf,
-        "mol_color": "#fb923c" if mol_txt_sel_pdf != "Sin molestias" else "#9ca3af",
+        "mol_color": (
+            color_severidad_molestia(racha_por_jugador.get(jugador_sel_id, 0))
+            if mol_txt_sel_pdf != "Sin molestias" else "#9ca3af"
+        ),
         "detalle_items": detalle_items_pdf,
     }
 
