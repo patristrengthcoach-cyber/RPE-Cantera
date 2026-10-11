@@ -3,6 +3,7 @@ import io
 import json
 import math
 import os
+import re
 import urllib.parse
 from datetime import datetime
 import pandas as pd
@@ -206,16 +207,29 @@ def valor(row, idx):
 
 
 def a_float(v):
+    """Convierte a número tolerando formatos del formulario como '4 - Muy bien',
+    '7,5' o ' 8 ' (antes estos valores se perdían y el jugador salía sin dato)."""
     try:
         return float(v)
     except (TypeError, ValueError):
+        pass
+    if v is None:
         return None
+    m = re.match(r"^\s*(\d+(?:[.,]\d+)?)", str(v))
+    return float(m.group(1).replace(",", ".")) if m else None
 
 
 def parsear_id_nombre(texto):
     if texto is None:
         return None, None
     texto = str(texto).strip()
+    # Normaliza el código: 'rcf_7', 'RCF 007', 'RCF-007' -> 'RCF_007', para que el
+    # mismo jugador no se parta en dos por escribir el código de otra forma.
+    m = re.match(r"(?i)^rcf[\s_\-]*(\d+)\s*(.*)$", texto)
+    if m:
+        id_norm = f"RCF_{int(m.group(1)):03d}"
+        nombre = " ".join(m.group(2).split()) or id_norm
+        return id_norm, nombre
     partes = texto.split(" ", 1)
     if len(partes) == 2:
         return partes[0].strip(), partes[1].strip()
@@ -298,12 +312,64 @@ def _fig_a_imagen_bytes(fig, width=1000, height=420, scale=2):
     sólido (no transparente) porque el motor del PDF (xhtml2pdf/reportlab) no
     compone bien el canal alfa: un PNG con fondo transparente puede pintarse
     en negro dentro del informe."""
+    # Se dibuja con matplotlib (Python puro) a partir de los datos de la figura de
+    # Plotly: kaleido necesita un navegador interno que suele fallar en Streamlit
+    # Cloud y dejaba el PDF sin gráfico.
+    global _ULTIMO_ERROR_GRAFICO
+    _ULTIMO_ERROR_GRAFICO = None
     try:
-        fig_export = go.Figure(fig)
-        fig_export.update_layout(paper_bgcolor="#0f172a", plot_bgcolor="#0f172a")
-        return fig_export.to_image(format="png", width=width, height=height, scale=scale)
-    except Exception:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        bg, txt, grid = "#0f172a", "#cbd5e1", "#334155"
+        f_, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100 * scale / 1.5)
+        f_.patch.set_facecolor(bg)
+        ax.set_facecolor(bg)
+        etiquetas = []
+        barras = [t for t in fig.data if t.type == "bar"]
+        lineas = [t for t in fig.data if t.type == "scatter"]
+        if barras:
+            etiquetas = [str(x) for x in barras[0].x]
+            n = len(barras)
+            ancho_b = 0.8 / n
+            for i, t in enumerate(barras):
+                xs = [j - 0.4 + ancho_b * (i + 0.5) for j in range(len(etiquetas))]
+                ax.bar(xs, [float(v) for v in t.y], width=ancho_b * 0.9, color=t.marker.color, label=t.name)
+            if n > 1 or barras[0].name:
+                leg = ax.legend(facecolor=bg, edgecolor=grid, labelcolor=txt, loc="upper right")
+        for t in lineas:
+            etiquetas = [str(x) for x in t.x]
+            ys = [float(v) for v in t.y]
+            idx = list(range(len(ys)))
+            ax.plot(idx, ys, color=t.line.color or "#64748b", linewidth=2)
+            ax.fill_between(idx, ys, color="#64748b", alpha=0.10)
+            cols = t.marker.color
+            ax.scatter(idx, ys, c=(cols if not isinstance(cols, str) and cols is not None else "#10b981"),
+                       s=140, edgecolors=bg, zorder=3)
+            for i_, y_ in zip(idx, ys):
+                ax.annotate(f"{y_:.0f}", (i_, y_), textcoords="offset points", xytext=(0, 10),
+                            ha="center", color=txt, fontsize=9)
+        ax.set_xticks(range(len(etiquetas)))
+        ax.set_xticklabels(etiquetas, color=txt, fontsize=9)
+        ax.tick_params(axis="y", colors=txt, labelsize=9)
+        ax.set_ylabel("UA (sRPE)", color=txt, fontsize=9)
+        ax.grid(axis="y", color=grid, alpha=0.5, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for sp in ax.spines.values():
+            sp.set_color(grid)
+        ax.margins(x=0.06, y=0.15)
+        f_.tight_layout()
+        buf = io.BytesIO()
+        f_.savefig(buf, format="png", facecolor=bg)
+        plt.close(f_)
+        return buf.getvalue()
+    except Exception as e_graf:
+        _ULTIMO_ERROR_GRAFICO = f"{type(e_graf).__name__}: {e_graf}"
         return None
+
+
+_ULTIMO_ERROR_GRAFICO = None
 
 
 def generar_pdf_informe(
@@ -541,7 +607,7 @@ def _minutos_partido_file(categoria_key):
     return f"minutos_partido_por_jugador_{categoria_key}.json"
 
 
-MINUTOS_ENTRENO_DEFECTO = 75
+MINUTOS_ENTRENO_DEFECTO = 50  # duración por defecto de un entreno; se cambia día a día en el editor
 
 
 def cargar_minutos_entreno_guardados(categoria_key):
@@ -596,6 +662,27 @@ def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
 SIN_MOLESTIA_TEXTOS = {"no", "nada", "ninguna", "ningun", "ningún", "sin molestias", ""}
 
 
+def _tiene_molestia(mol) -> bool:
+    """True si el texto describe una molestia real. Reconoce las formas habituales
+    de decir 'nada' en el formulario ('No', 'Ninguna', 'En ninguna', 'Ni',
+    'No, ninguna molestia'...), para no contar como molestia respuestas vacías."""
+    if mol is None:
+        return False
+    try:
+        if pd.isna(mol):
+            return False
+    except (TypeError, ValueError):
+        pass
+    t = str(mol).strip().rstrip(".").strip().lower()
+    if t in SIN_MOLESTIA_TEXTOS or t in {"-", "--", "0", "ninguno", "ninguna"}:
+        return False
+    if re.match(r"^(ning|nada|sin\b|en ning|ni$)", t):
+        return False
+    if re.match(r"^no\b", t) and len(t) <= 30:
+        return False
+    return True
+
+
 def calcular_racha_molestias(historial_jugador: pd.DataFrame, fechas_referencia=None):
     """Recorre TODOS los registros (wellness/entreno/partido) de un jugador y calcula
     cuántos días seguidos lleva reportando alguna molestia (excluyendo 'no'/'nada').
@@ -610,7 +697,7 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame, fechas_referencia=
     for _, r in historial_jugador.iterrows():
         fecha = r["fecha"]
         mol = r.get("molestias")
-        tiene = mol is not None and str(mol).strip().rstrip(".").lower() not in SIN_MOLESTIA_TEXTOS
+        tiene = _tiene_molestia(mol)
         if fecha not in por_dia:
             por_dia[fecha] = {"tiene": False, "texto": "Sin molestias"}
         if tiene:
@@ -618,6 +705,18 @@ def calcular_racha_molestias(historial_jugador: pd.DataFrame, fechas_referencia=
             por_dia[fecha]["texto"] = str(mol).strip()
     dias_ordenados = sorted(por_dia.keys(), key=lambda d: pd.to_datetime(d, dayfirst=True))
     if not dias_ordenados:
+        return 0, "Sin molestias"
+    # Si tras su última molestia el jugador ya ha hecho 2 entrenos SIN reportarla,
+    # se considera recuperado y sale de la lista de molestias activas.
+    entrenos_sin_molestia = 0
+    for _, r in historial_jugador.sort_values("timestamp").iterrows():
+        mol_r = r.get("molestias")
+        tiene_r = _tiene_molestia(mol_r)
+        if tiene_r:
+            entrenos_sin_molestia = 0
+        elif r.get("tipo") == "ENTRENO":
+            entrenos_sin_molestia += 1
+    if entrenos_sin_molestia >= 2:
         return 0, "Sin molestias"
     if fechas_referencia and dias_ordenados[-1] not in fechas_referencia:
         return 0, "Sin molestias"
@@ -698,17 +797,17 @@ def procesar_registros(df_raw: pd.DataFrame, cols: dict):
             disp_raw = valor(row, cols["disponible"])
             fila["disponible"] = str(disp_raw).strip().upper() if disp_raw is not None else None
             mol = valor(row, cols["molestia_manana"])
-            fila["molestias"] = str(mol).strip() if mol not in (None, "") else "Sin molestias"
+            fila["molestias"] = str(mol).strip() if _tiene_molestia(mol) else "Sin molestias"
             fila["rpe"] = None
         elif tipo == "ENTRENO":
             fila["rpe"] = a_float(valor(row, cols["rpe_entreno"]))
             mol = valor(row, cols["molestia_entreno"])
-            fila["molestias"] = str(mol).strip() if mol not in (None, "") else "Sin molestias"
+            fila["molestias"] = str(mol).strip() if _tiene_molestia(mol) else "Sin molestias"
             fila["rendimiento"] = a_float(valor(row, cols["rendimiento_entreno"]))
         elif tipo == "PARTIDO":
             fila["rpe"] = a_float(valor(row, cols["rpe_partido"]))
             mol = valor(row, cols["molestia_partido"])
-            fila["molestias"] = str(mol).strip() if mol not in (None, "") else "Sin molestias"
+            fila["molestias"] = str(mol).strip() if _tiene_molestia(mol) else "Sin molestias"
             fila["rendimiento"] = a_float(valor(row, cols["rendimiento_partido"]))
         else:
             continue  # fila sin tipo reconocible, se ignora
@@ -1072,6 +1171,17 @@ with col_izq:
                     st.session_state["jugador_sel_borrado"] = True
                     st.rerun()
             roster_visible = roster[roster["nombre"].str.contains(busqueda, case=False, na=False, regex=False)] if busqueda else roster
+            # Jugadores que SÍ constan en el Excel pero no tienen registro en esta
+            # vista/filtro (p. ej. solo respondieron RPE y estás en Wellness).
+            ids_en_roster = set(roster["idJugador"])
+            sin_registro_vista = df.drop_duplicates("idJugador", keep="last")
+            sin_registro_vista = sin_registro_vista[~sin_registro_vista["idJugador"].isin(ids_en_roster)]
+            if not sin_registro_vista.empty:
+                with st.expander(f"ℹ️ {len(sin_registro_vista)} jugadores sin registro en esta vista/filtro"):
+                    st.caption(", ".join(
+                        f"{r_['idJugador']} {r_['nombre']}" if r_['nombre'] != r_['idJugador'] else r_['idJugador']
+                        for _, r_ in sin_registro_vista.sort_values("idJugador").iterrows()
+                    ))
             with st.container(height=520, key="roster_scroll"):
                 if roster_visible.empty:
                     st.caption("Ningún jugador coincide con la búsqueda.")
@@ -1525,8 +1635,8 @@ with pdf_placeholder:
                     )
                     if faltan_graficos:
                         st.warning(
-                            "⚠️ El PDF se generó pero algún gráfico no se pudo convertir a imagen "
-                            "(revisa que 'kaleido' esté instalado correctamente en el despliegue)."
+                            "⚠️ El PDF se generó pero algún gráfico no se pudo dibujar "
+                            f"(detalle: {_ULTIMO_ERROR_GRAFICO}). Revisa que 'matplotlib' esté en requirements.txt."
                         )
                 except Exception as e_pdf:
                     st.session_state["pdf_bytes"] = None
