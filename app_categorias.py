@@ -384,25 +384,46 @@ def generar_pdf_informe(
     fig_semana_png,
     subtitulo_semana,
     filas_molestia=None,
+    jugadores_sin_control=None,
+    dia_control=None,
 ):
     """Construye un informe PDF que reproduce el aspecto visual del dashboard
     (mismos colores, tarjetas oscuras y tipografía) usando HTML + xhtml2pdf,
     en vez de un documento de tablas genéricas."""
 
-    def _img_tag(png_bytes, ancho="100%"):
+    def _img_tag(png_bytes, ancho=640):
         if not png_bytes:
             return ""
         b64 = base64.b64encode(png_bytes).decode("ascii")
-        # xhtml2pdf no respeta de forma fiable un ancho en % puesto en CSS (mismo
-        # problema ya visto con las tablas); el atributo HTML "width" sí funciona.
-        return f'<img src="data:image/png;base64,{b64}" width="{ancho}" />'
+        # Tamaño FIJO en píxeles (ancho y alto con la proporción real del PNG):
+        # xhtml2pdf no resuelve bien anchos en % en imágenes y las dejaba enormes
+        # o invisibles.
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(png_bytes)) as im_g:
+                w_g, h_g = im_g.size
+            alto = max(int(ancho * h_g / max(w_g, 1)), 1)
+        except Exception:
+            alto = int(ancho * 0.42)
+        return f'<img src="data:image/png;base64,{b64}" width="{ancho}" height="{alto}" />'
 
     logo_html = ""
     if os.path.exists("logo.png"):
         try:
             with open("logo.png", "rb") as f_logo:
                 logo_b64 = base64.b64encode(f_logo.read()).decode("ascii")
-            logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="max-height:44px; max-width:44px;" />'
+            # xhtml2pdf ignora max-width/max-height: sin un width/height explícito en
+            # el propio <img> el escudo salía a tamaño real y ocupaba toda la página,
+            # empujando los gráficos fuera. Se calcula el tamaño con su proporción.
+            try:
+                from PIL import Image
+                with Image.open("logo.png") as im_logo:
+                    w_l, h_l = im_logo.size
+                escala_l = 44 / max(w_l, h_l, 1)
+                w_l, h_l = max(int(w_l * escala_l), 1), max(int(h_l * escala_l), 1)
+            except Exception:
+                w_l, h_l = 44, 44
+            logo_html = f'<img src="data:image/png;base64,{logo_b64}" width="{w_l}" height="{h_l}" />'
         except Exception:
             logo_html = ""
     if not logo_html:
@@ -545,6 +566,15 @@ def generar_pdf_informe(
         {tarjetas_mol_html}
         """
 
+    sin_control_html = ""
+    if jugadores_sin_control:
+        nombres_sc = ", ".join(f"{i_} {n_}" if n_ != i_ else i_ for i_, n_ in jugadores_sin_control)
+        sin_control_html = f"""
+        <div class="section-title" style="border-left-color:#facc15;">&#9888; Sin control de carga <span class="section-sub">({len(jugadores_sin_control)} · {dia_control})</span></div>
+        <table style="width:100%; border-collapse:collapse; background-color:#0f172a; border:1px solid #1e293b;
+            border-left:3px solid #facc15;"><tr><td style="padding:8px 10px; font-size:7.5pt; color:#fde68a;">{nombres_sc}</td></tr></table>
+        """
+
     html = f"""<!doctype html>
 <html>
 <head>
@@ -588,6 +618,7 @@ def generar_pdf_informe(
   {ficha_html}
   {charts_html}
   {molestias_html}
+  {sin_control_html}
 
   <div class="footer-nota">Informe generado automáticamente por RCF Dashboard &bull; Uso interno del cuerpo técnico</div>
 </body>
@@ -1285,6 +1316,39 @@ with col_izq:
                     with mc3:
                         render_kpi("DOMS", f["doms"] if f["doms"] is not None else "—", color_escala_1_5(f["doms"]))
 
+    # ============================================================
+    # SIN CONTROL DE CARGA — jugadores sin RPE (entreno/partido) el día de referencia
+    # (el día elegido en el filtro, o el último día con sesiones del periodo filtrado)
+    # ============================================================
+    df_ctrl = df_sesiones_todas[df_sesiones_todas["rpe"].notna()]
+    if mes_sel != "TODOS":
+        df_ctrl = df_ctrl[df_ctrl["mes"] == mes_sel]
+    if semana_sel != "TODOS":
+        df_ctrl = df_ctrl[df_ctrl["semana"] == semana_sel]
+    if dia_sel != "TODOS":
+        df_ctrl = df_ctrl[df_ctrl["fecha"] == dia_sel]
+    jugadores_sin_control = []
+    dia_control = None
+    if not df_ctrl.empty:
+        dia_control = dia_sel if dia_sel != "TODOS" else df_ctrl.loc[df_ctrl["timestamp"].idxmax(), "fecha"]
+        ids_con_control = set(df_ctrl.loc[df_ctrl["fecha"] == dia_control, "idJugador"])
+        todos_jug = df.drop_duplicates("idJugador", keep="last").sort_values("idJugador")
+        jugadores_sin_control = [
+            (r_["idJugador"], r_["nombre"]) for _, r_ in todos_jug.iterrows()
+            if r_["idJugador"] not in ids_con_control
+        ]
+    if jugadores_sin_control:
+        st.markdown(
+            f"<div style='font-size:1.05rem; font-weight:900; color:#fde68a; "
+            f"border-left:5px solid #facc15; padding-left:10px; margin:1rem 0 0.5rem 0;'>"
+            f"⚠️ SIN CONTROL DE CARGA ({len(jugadores_sin_control)}) · {dia_control}</div>",
+            unsafe_allow_html=True,
+        )
+        st.warning(
+            "No han rellenado el control de carga (RPE): "
+            + ", ".join(f"{i_} {n_}" if n_ != i_ else i_ for i_, n_ in jugadores_sin_control)
+        )
+
 with col_der:
     render_section_title("🩺 Ficha Individual")
     if fila_jugador is None:
@@ -1627,6 +1691,8 @@ with pdf_placeholder:
                         fig_semana_png=png_semana,
                         subtitulo_semana=subtitulo_semana_pdf,
                         filas_molestia=filas_molestia,
+                        jugadores_sin_control=jugadores_sin_control,
+                        dia_control=dia_control,
                     )
                     st.session_state["pdf_firma"] = firma_actual_pdf
                     faltan_graficos = (
