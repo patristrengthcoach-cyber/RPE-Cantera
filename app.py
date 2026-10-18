@@ -125,6 +125,11 @@ CATEGORIAS = {
         "csv_url": _csv_url_por_hoja(MASTER_SHEET_ID, "Infantil Femenino"),
         "cols": COLS_SOLO_RPE,
     },
+    "alevin": {
+        "label": "Alevín",
+        "csv_url": _csv_url_por_hoja(MASTER_SHEET_ID, "Alevin"),
+        "cols": COLS_SOLO_RPE,
+    },
 }
 
 st.markdown(
