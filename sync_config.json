@@ -1,0 +1,18 @@
+{
+  "_comentario": "IDs de los archivos de Google Drive (la parte larga de la URL). 'categoria' en pliegues es una pista para desempatar nombres (puede ser 'Infantil' = Infantil A/B/Femenino). Para añadir otra categoría, agrega otra línea.",
+  "registro_ids": [
+    "1jOGhrHZcTprXl48VbC4UZ0uiUcj8zh-ZEfwcqAEga0I",
+    "1DoIp110ODlIiL_bqDIl6Nt0UxY_rkPfE316-RWXHVmw"
+  ],
+  "roster_id": "1GKSEwfqJwGfiaIxz_3_WynI3gwkg5e9lDj4zEhFlXYE",
+  "pliegues": [
+    {
+      "id": "1nDP9ULehZRIUt_OqWmk7dGu_SOmTnQ6H",
+      "categoria": "Infantil"
+    },
+    {
+      "id": "1aKttzGn6k7ZfGHfwAhYbL_hKW-tapJ5bP3j2U1jamcg",
+      "categoria": "Juvenil A"
+    }
+  ]
+}
