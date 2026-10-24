@@ -896,10 +896,41 @@ def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes,
         "ID": mol_d["idJugador"], "Jugador": mol_d["nombre"], "Molestia": mol_d["molestias"],
     })
 
+    # Hoja Partidos: respuestas del formulario + jugadores con minutos guardados
+    # aunque no hayan rellenado el RPE (así los minutos marcados siempre salen).
+    df_partidos = _sesiones("PARTIDO", "Min. jugados")
+    nombres_j = df_cat.drop_duplicates("idJugador", keep="last").set_index("idJugador")["nombre"].to_dict()
+    ya_en_hoja = set(zip(d.loc[d["tipo"] == "PARTIDO", "idJugador"],
+                         d.loc[d["tipo"] == "PARTIDO", "fecha"].map(_norm_fecha_clave)))
+    extra = []
+    for clave, m in mins_p.items():
+        id_k, _, f_k = clave.partition("|")
+        try:
+            f_dt = pd.to_datetime(f_k, dayfirst=True)
+        except Exception:
+            continue
+        if NOMBRES_MESES[f_dt.month - 1] != mes or (id_k, f_k) in ya_en_hoja or m is None:
+            continue
+        extra.append({
+            "Fecha": f_k, "Día": DIAS_SEMANA[f_dt.dayofweek], "ID": id_k, "Jugador": nombres_j.get(id_k, ""),
+            "RPE": float("nan"), "Min. jugados": m, "Carga (UA)": float("nan"),
+            "Rendimiento": float("nan"), "Molestia": "Sin respuesta RPE",
+        })
+    if extra:
+        df_partidos = pd.concat([df_partidos, pd.DataFrame(extra)], ignore_index=True)
+        df_partidos = df_partidos.sort_values(
+            ["Fecha", "ID"], key=lambda c: pd.to_datetime(c, dayfirst=True, errors="coerce") if c.name == "Fecha" else c
+        )
+    n_min_part = int(df_partidos["Min. jugados"].notna().sum()) if not df_partidos.empty else 0
+    nota_partidos = (
+        f"{len(df_partidos)} registros · {n_min_part} con minutos · "
+        f"{len(mins_p)} minutos de partido guardados en total (todos los meses)"
+    )
+
     hojas = {
         "Resumen": df_resumen,
         "Entrenos": _sesiones("ENTRENO", "Minutos"),
-        "Partidos": _sesiones("PARTIDO", "Min. jugados"),
+        "Partidos": df_partidos,
     }
     gw_all = d[d["tipo"] == "WELLNESS"]
     if not gw_all.empty:
@@ -923,6 +954,9 @@ def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes,
             ws = xw.sheets[nombre_h]
             ws["A1"] = f"{categoria_label} · {mes} · {nombre_h}"
             ws["A1"].font = Font(bold=True, size=13)
+            if nombre_h == "Partidos":
+                ws["A2"] = nota_partidos
+                ws["A2"].font = Font(italic=True, color="6B7280")
             for c in ws[3]:
                 c.font = Font(bold=True, color="FFFFFF")
                 c.fill = PatternFill("solid", fgColor="10B981")
