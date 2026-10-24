@@ -706,6 +706,24 @@ def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
         return False
 
 
+def guardar_minutos_partido_lote(categoria_key, fecha, minutos_por_jugador):
+    """Guarda de golpe los minutos de varios jugadores en un partido.
+    `minutos_por_jugador` = {idJugador: minutos o None}. None/vacío borra el dato."""
+    datos = cargar_minutos_partido_guardados(categoria_key)
+    for id_j, mins in minutos_por_jugador.items():
+        clave = f"{id_j}|{fecha}"
+        if mins is None or (isinstance(mins, float) and math.isnan(mins)):
+            datos.pop(clave, None)
+        else:
+            datos[clave] = int(mins)
+    try:
+        with open(_minutos_partido_file(categoria_key), "w") as f:
+            json.dump(datos, f)
+        return True
+    except Exception:
+        return False
+
+
 SIN_MOLESTIA_TEXTOS = {"no", "nada", "ninguna", "ningun", "ningún", "sin molestias", ""}
 
 
@@ -786,24 +804,40 @@ def color_severidad_molestia(racha: int) -> str:
     return "#ef4444" if racha and racha >= 3 else "#fb923c"
 
 
-def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes):
+def _norm_fecha_clave(f):
+    """Normaliza una fecha a dd/mm/aaaa para que '5/3/2026' y '05/03/2026' casen."""
+    try:
+        return pd.to_datetime(str(f), dayfirst=True).strftime("%d/%m/%Y")
+    except Exception:
+        return str(f)
+
+
+def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes,
+                                   mins_entreno=None, mins_partido=None):
     """Excel con el informe de UN mes de UNA categoría: resumen por jugador,
     detalle de entrenos (RPE, minutos, carga), partidos, wellness, molestias y
     carga por día. Devuelve los bytes del .xlsx, o None si no hay datos ese mes."""
     d = df_cat[df_cat["mes"] == mes].copy()
     if d.empty:
         return None
-    mins_e = cargar_minutos_entreno_guardados(categoria_key)
-    mins_p = cargar_minutos_partido_guardados(categoria_key)
+    # Se usan los mismos minutos que ve el dashboard (si se pasan) y, si no, los
+    # guardados en disco. Claves normalizadas (ID y fecha) para que siempre casen.
+    mins_e_raw = mins_entreno if mins_entreno is not None else cargar_minutos_entreno_guardados(categoria_key)
+    mins_p_raw = mins_partido if mins_partido is not None else cargar_minutos_partido_guardados(categoria_key)
+    mins_e = {_norm_fecha_clave(k): v for k, v in mins_e_raw.items()}
+    mins_p = {}
+    for k, v in mins_p_raw.items():
+        id_k, _, f_k = str(k).partition("|")
+        mins_p[f"{parsear_id_nombre(id_k)[0] or id_k}|{_norm_fecha_clave(f_k)}"] = v
     d = d.sort_values("timestamp")
     d["_dia"] = d["timestamp"].dt.dayofweek.map(lambda i: DIAS_SEMANA[i])
     d["_rpe"] = pd.to_numeric(d["rpe"], errors="coerce") if "rpe" in d.columns else float("nan")
 
     def _minutos(r):
         if r["tipo"] == "ENTRENO":
-            return mins_e.get(r["fecha"], MINUTOS_ENTRENO_DEFECTO)
+            return mins_e.get(_norm_fecha_clave(r["fecha"]), MINUTOS_ENTRENO_DEFECTO)
         if r["tipo"] == "PARTIDO":
-            return mins_p.get(f"{r['idJugador']}|{r['fecha']}")
+            return mins_p.get(f"{r['idJugador']}|{_norm_fecha_clave(r['fecha'])}")
         return None
 
     d["_min"] = pd.to_numeric(d.apply(_minutos, axis=1), errors="coerce")
@@ -829,7 +863,12 @@ def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes):
             "Entrenos": len(ge), "RPE medio entreno": ge["_rpe"].mean(),
             "Min. entreno total": ge["_min"].sum(), "Carga entreno (UA)": ge["_srpe"].sum(),
             "Partidos": len(gp), "RPE medio partido": gp["_rpe"].mean(),
-            "Min. jugados total": gp["_min"].sum(), "Carga partido (UA)": gp["_srpe"].sum(),
+            "Min. jugados total": gp["_min"].sum(), "Partidos sin minutos": int(gp["_min"].isna().sum()),
+            "Min. por partido": "; ".join(
+                f"{f[:5]}: {int(m)}" if pd.notna(m) else f"{f[:5]}: —"
+                for f, m in zip(gp["fecha"], gp["_min"])
+            ),
+            "Carga partido (UA)": gp["_srpe"].sum(),
             "Carga total (UA)": ge["_srpe"].sum() + gp["_srpe"].sum(),
         }
         if "wellness_score" in g.columns:
@@ -1245,6 +1284,47 @@ roster["molestias_estado"] = roster["idJugador"].map(lambda i: estados.get(i, {}
 orden_riesgo = {"rojo": 0, "amarillo": 1, "verde": 2}
 roster["orden"] = roster["colorRiesgo"].map(orden_riesgo)
 roster = roster.sort_values("orden")
+
+# ------------------------------------------------------------
+# Minutos de partido de TODOS los jugadores a la vez (tabla editable)
+# ------------------------------------------------------------
+if vista_key == "rpe_partido":
+    fechas_partido = sorted(
+        df.loc[df["tipo"] == "PARTIDO", "fecha"].unique(),
+        key=lambda d: pd.to_datetime(d, dayfirst=True), reverse=True,
+    )
+    if fechas_partido:
+        with st.expander("⏱️ Minutos jugados del partido (todos los jugadores)", expanded=False):
+            idx_fecha = fechas_partido.index(dia_sel) if dia_sel in fechas_partido else 0
+            fecha_partido_sel = st.selectbox(
+                "Partido", fechas_partido, index=idx_fecha, key=f"lote_fecha_{categoria_key}"
+            )
+            reg_p = df[(df["tipo"] == "PARTIDO") & (df["fecha"] == fecha_partido_sel)]
+            reg_p = reg_p.sort_values("timestamp").drop_duplicates("idJugador", keep="last").sort_values("idJugador")
+            tabla_min = pd.DataFrame({
+                "ID": reg_p["idJugador"].values,
+                "Jugador": reg_p["nombre"].values,
+                "Minutos jugados": [
+                    minutos_partido_guardados.get(f"{i}|{fecha_partido_sel}") for i in reg_p["idJugador"]
+                ],
+            })
+            tabla_min["Minutos jugados"] = pd.to_numeric(tabla_min["Minutos jugados"], errors="coerce")
+            editada = st.data_editor(
+                tabla_min, hide_index=True, use_container_width=True,
+                disabled=["ID", "Jugador"],
+                column_config={"Minutos jugados": st.column_config.NumberColumn(min_value=0, max_value=130, step=1)},
+                key=f"lote_min_{categoria_key}_{fecha_partido_sel}",
+            )
+            n_con = int(editada["Minutos jugados"].notna().sum())
+            st.caption(f"{n_con} de {len(editada)} jugadores con minutos. Deja vacío = no convocado.")
+            if st.button("💾 Guardar minutos del partido", key=f"lote_guardar_{categoria_key}_{fecha_partido_sel}"):
+                if guardar_minutos_partido_lote(
+                    categoria_key, fecha_partido_sel, dict(zip(editada["ID"], editada["Minutos jugados"]))
+                ):
+                    st.toast("Minutos del partido guardados ✅")
+                    st.rerun()
+                else:
+                    st.toast("No se pudo guardar ❌")
 
 # ============================================================
 # KPIs
@@ -1868,7 +1948,10 @@ with pdf_placeholder:
                 with st.spinner("Generando informe mensual..."):
                     try:
                         if alcance_informe == "Esta categoría":
-                            datos_inf = construir_informe_mensual_xlsx(categoria_key, CATEGORIA, df, mes_informe)
+                            datos_inf = construir_informe_mensual_xlsx(
+                                categoria_key, CATEGORIA, df, mes_informe,
+                                mins_entreno=minutos_entreno_guardados, mins_partido=minutos_partido_guardados,
+                            )
                             if datos_inf is None:
                                 st.session_state["informe_mensual"] = None
                                 st.warning(f"No hay datos de {CATEGORIA} en {mes_informe}.")
