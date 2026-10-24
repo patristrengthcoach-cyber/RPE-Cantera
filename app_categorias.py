@@ -454,7 +454,9 @@ def generar_pdf_informe(
     )
 
     # anchos del roster: [ID (+punto de riesgo), Nombre, valor(es), ACWR, Disponibilidad, Molestias]
-    if len(columnas_roster) == 7:
+    if len(columnas_roster) == 8:
+        anchos_roster = [11, 21, 8, 10, 8, 9, 14, 19]
+    elif len(columnas_roster) == 7:
         anchos_roster = [12, 25, 10, 11, 9, 15, 18]
     else:
         anchos_roster = [14, 30, 12, 10, 16, 18]
@@ -677,12 +679,20 @@ def guardar_minutos_entreno_en_disco(categoria_key, fecha, minutos):
 
 
 def cargar_minutos_partido_guardados(categoria_key):
-    """Devuelve un diccionario {'idJugador|fecha': minutos}."""
+    """Devuelve un diccionario {'idJugador|fecha': minutos}. Los códigos se
+    normalizan (RCF_007) para que casen con los del Excel aunque se guardaran
+    con otra forma de escribir el código."""
     try:
         with open(_minutos_partido_file(categoria_key), "r") as f:
-            return json.load(f)
+            crudo = json.load(f)
     except Exception:
         return {}
+    normalizado = {}
+    for clave, mins in crudo.items():
+        id_j, _, fecha = str(clave).partition("|")
+        id_norm = parsear_id_nombre(id_j)[0] or id_j
+        normalizado[f"{id_norm}|{fecha}"] = mins
+    return normalizado
 
 
 def guardar_minutos_partido_en_disco(categoria_key, id_jugador, fecha, minutos):
@@ -1690,7 +1700,7 @@ kpis_pdf = [
 if vista_key == "wellness":
     columnas_roster_pdf = ["ID", "Nombre", "Wellness", "ACWR", "Disponibilidad", "Molestias"]
 else:
-    columnas_roster_pdf = ["ID", "Nombre", "RPE", "Rendimiento", "ACWR", "Disponibilidad", "Molestias"]
+    columnas_roster_pdf = ["ID", "Nombre", "RPE", "Rendimiento", "Min.", "ACWR", "Disponibilidad", "Molestias"]
 
 filas_roster_pdf = []
 for _, row_pdf in roster.iterrows():
@@ -1726,11 +1736,17 @@ for _, row_pdf in roster.iterrows():
         val_txt_pdf = f"{val_pdf:.0f}" if pd.notna(val_pdf) else "—"
         rend_pdf = row_pdf.get("rendimiento")
         rend_txt_pdf = f"{rend_pdf:.0f}" if pd.notna(rend_pdf) else "—"
+        if vista_key == "rpe_partido":
+            mins_pdf = minutos_partido_guardados.get(f"{row_pdf.get('idJugador')}|{row_pdf.get('fecha')}")
+        else:
+            mins_pdf = minutos_entreno_guardados.get(row_pdf.get("fecha"), MINUTOS_ENTRENO_DEFECTO)
+        mins_txt_pdf = f"{mins_pdf:g}" if mins_pdf is not None else "—"
         filas_roster_pdf.append([
             id_html_pdf,
             row_pdf.get("nombre", ""),
             f'<span style="color:{val_color_pdf}; font-weight:bold;">{val_txt_pdf}</span>',
             rend_txt_pdf,
+            mins_txt_pdf,
             acwr_html_pdf,
             disp_html_pdf,
             mol_html_pdf,
