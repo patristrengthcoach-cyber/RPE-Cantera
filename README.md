@@ -21,7 +21,7 @@ Cada categoría se selecciona desde un desplegable en la app. Los datos se leen 
 ## Archivos
 
 - `app_categorias.py` — aplicación principal de Streamlit (`app.py` es una copia idéntica).
-- `requirements.txt` — dependencias de Python (`streamlit`, `pandas`, `plotly`, `matplotlib`, `xhtml2pdf`).
+- `requirements.txt` — dependencias de Python (`streamlit`, `pandas`, `plotly`, `matplotlib`, `xhtml2pdf`, `openpyxl`).
 - `logo.png` — escudo del club, usado en el informe PDF (opcional; si no está, se muestra un emblema "RCF").
 
 ## Funcionalidades
@@ -31,6 +31,7 @@ Cada categoría se selecciona desde un desplegable en la app. Los datos se leen 
 - Minutos de entreno **por día y por categoría** (50 min por defecto; se cambian en el editor y el botón guarda solo el día elegido). Minutos de partido por jugador y partido.
 - **Molestias activas**: solo las reportadas el último día con datos (o hoy); una molestia sale de la lista tras 2 entrenos sin reportarla; en rojo si lleva 3 o más días seguidos.
 - **Sin control de carga**: aviso con los jugadores sin RPE el día de referencia.
+- **Informe mensual en Excel** (desplegable "📅 Informe mensual", arriba): por mes y categoría, o todas las categorías en un ZIP. Hojas: Resumen por jugador, Entrenos, Partidos, Wellness, Molestias y Carga por día (con RPE, minutos, carga y molestias).
 - Exportación a **PDF** del informe con la selección actual (KPIs, plantilla, ficha, gráficos, molestias y jugadores sin control).
 
 ## Cómo funciona la carga de datos

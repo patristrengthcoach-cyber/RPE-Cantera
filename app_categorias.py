@@ -5,6 +5,7 @@ import math
 import os
 import re
 import urllib.parse
+import zipfile
 from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
@@ -773,6 +774,115 @@ def color_severidad_molestia(racha: int) -> str:
     """Color de una molestia según cuántos días seguidos lleva activa: naranja
     si es reciente (1-2 días), rojo si ya persiste 3 días seguidos o más."""
     return "#ef4444" if racha and racha >= 3 else "#fb923c"
+
+
+def construir_informe_mensual_xlsx(categoria_key, categoria_label, df_cat, mes):
+    """Excel con el informe de UN mes de UNA categoría: resumen por jugador,
+    detalle de entrenos (RPE, minutos, carga), partidos, wellness, molestias y
+    carga por día. Devuelve los bytes del .xlsx, o None si no hay datos ese mes."""
+    d = df_cat[df_cat["mes"] == mes].copy()
+    if d.empty:
+        return None
+    mins_e = cargar_minutos_entreno_guardados(categoria_key)
+    mins_p = cargar_minutos_partido_guardados(categoria_key)
+    d = d.sort_values("timestamp")
+    d["_dia"] = d["timestamp"].dt.dayofweek.map(lambda i: DIAS_SEMANA[i])
+    d["_rpe"] = pd.to_numeric(d["rpe"], errors="coerce") if "rpe" in d.columns else float("nan")
+
+    def _minutos(r):
+        if r["tipo"] == "ENTRENO":
+            return mins_e.get(r["fecha"], MINUTOS_ENTRENO_DEFECTO)
+        if r["tipo"] == "PARTIDO":
+            return mins_p.get(f"{r['idJugador']}|{r['fecha']}")
+        return None
+
+    d["_min"] = pd.to_numeric(d.apply(_minutos, axis=1), errors="coerce")
+    d["_srpe"] = d["_rpe"] * d["_min"]
+    d["_tiene_mol"] = d["molestias"].map(_tiene_molestia) if "molestias" in d.columns else False
+    d["_rend"] = pd.to_numeric(d["rendimiento"], errors="coerce") if "rendimiento" in d.columns else float("nan")
+    d["_mol_txt"] = d["molestias"].where(d["_tiene_mol"], "") if "molestias" in d.columns else ""
+
+    def _sesiones(tipo, etiqueta_min):
+        s = d[d["tipo"] == tipo]
+        return pd.DataFrame({
+            "Fecha": s["fecha"], "Día": s["_dia"], "ID": s["idJugador"], "Jugador": s["nombre"],
+            "RPE": s["_rpe"], etiqueta_min: s["_min"], "Carga (UA)": s["_srpe"],
+            "Rendimiento": s["_rend"], "Molestia": s["_mol_txt"],
+        })
+
+    resumen = []
+    for idj, g in d.groupby("idJugador"):
+        ge, gp, gw = g[g["tipo"] == "ENTRENO"], g[g["tipo"] == "PARTIDO"], g[g["tipo"] == "WELLNESS"]
+        mol = g[g["_tiene_mol"]]
+        fila = {
+            "ID": idj, "Jugador": g["nombre"].iloc[-1],
+            "Entrenos": len(ge), "RPE medio entreno": ge["_rpe"].mean(),
+            "Min. entreno total": ge["_min"].sum(), "Carga entreno (UA)": ge["_srpe"].sum(),
+            "Partidos": len(gp), "RPE medio partido": gp["_rpe"].mean(),
+            "Min. jugados total": gp["_min"].sum(), "Carga partido (UA)": gp["_srpe"].sum(),
+            "Carga total (UA)": ge["_srpe"].sum() + gp["_srpe"].sum(),
+        }
+        if "wellness_score" in g.columns:
+            fila["Wellness medio"] = pd.to_numeric(gw["wellness_score"], errors="coerce").mean()
+        fila["Días con molestia"] = mol["fecha"].nunique()
+        fila["Molestias reportadas"] = "; ".join(dict.fromkeys(mol["molestias"].astype(str).str.strip()))
+        resumen.append(fila)
+    df_resumen = pd.DataFrame(resumen).round(1).sort_values("ID")
+
+    ses = d[d["tipo"].isin(["ENTRENO", "PARTIDO"])]
+    if ses.empty:
+        df_dia = pd.DataFrame(columns=["Fecha", "Día", "Sesión", "Jugadores", "RPE medio", "Min. medios", "Carga media (UA)", "Carga total (UA)"])
+    else:
+        df_dia = ses.groupby(["fecha", "_dia", "tipo"]).agg(
+            Jugadores=("idJugador", "nunique"), RPE_medio=("_rpe", "mean"), Min_medios=("_min", "mean"),
+            Carga_media=("_srpe", "mean"), Carga_total=("_srpe", "sum"),
+        ).reset_index()
+        df_dia.columns = ["Fecha", "Día", "Sesión", "Jugadores", "RPE medio", "Min. medios", "Carga media (UA)", "Carga total (UA)"]
+        df_dia["Sesión"] = df_dia["Sesión"].map({"ENTRENO": "Entreno", "PARTIDO": "Partido"})
+        df_dia = df_dia.sort_values("Fecha", key=lambda c: pd.to_datetime(c, dayfirst=True)).round(1)
+
+    mol_d = d[d["_tiene_mol"]]
+    df_mol = pd.DataFrame({
+        "Fecha": mol_d["fecha"], "Sesión": mol_d["tipo"].map({"ENTRENO": "Entreno", "PARTIDO": "Partido", "WELLNESS": "Wellness"}),
+        "ID": mol_d["idJugador"], "Jugador": mol_d["nombre"], "Molestia": mol_d["molestias"],
+    })
+
+    hojas = {
+        "Resumen": df_resumen,
+        "Entrenos": _sesiones("ENTRENO", "Minutos"),
+        "Partidos": _sesiones("PARTIDO", "Min. jugados"),
+    }
+    gw_all = d[d["tipo"] == "WELLNESS"]
+    if not gw_all.empty:
+        cols_w = [("fecha", "Fecha"), ("idJugador", "ID"), ("nombre", "Jugador"), ("fatiga", "Fatiga"),
+                  ("sueno", "Sueño"), ("estres", "Estrés"), ("doms", "DOMS"), ("orina", "Orina"),
+                  ("wellness_score", "Wellness"), ("disponible", "Disponible"), ("periodo", "Período"),
+                  ("molestias", "Molestia")]
+        df_w = gw_all[[c for c, _ in cols_w if c in gw_all.columns]].copy()
+        df_w.columns = [n for c, n in cols_w if c in gw_all.columns]
+        if "Molestia" in df_w.columns:
+            df_w["Molestia"] = df_w["Molestia"].where(gw_all["_tiene_mol"], "")
+        hojas["Wellness"] = df_w.round(1)
+    hojas["Molestias"] = df_mol
+    hojas["Carga por día"] = df_dia
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        from openpyxl.styles import Font, PatternFill, Alignment
+        for nombre_h, df_h in hojas.items():
+            df_h.to_excel(xw, sheet_name=nombre_h, index=False, startrow=2)
+            ws = xw.sheets[nombre_h]
+            ws["A1"] = f"{categoria_label} · {mes} · {nombre_h}"
+            ws["A1"].font = Font(bold=True, size=13)
+            for c in ws[3]:
+                c.font = Font(bold=True, color="FFFFFF")
+                c.fill = PatternFill("solid", fgColor="10B981")
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            for i_col, nombre_col in enumerate(df_h.columns, start=1):
+                valores = [len(str(nombre_col))] + [len(str(v)) for v in df_h.iloc[:, i_col - 1].head(200)]
+                ws.column_dimensions[ws.cell(row=3, column=i_col).column_letter].width = min(max(valores) + 3, 60)
+            ws.freeze_panes = "A4"
+    return buf.getvalue()
 
 
 def ordenar_semanas_desc(semanas):
@@ -1722,3 +1832,70 @@ with pdf_placeholder:
             )
         elif st.session_state["pdf_bytes"] is not None:
             st.caption("Los filtros cambiaron: vuelve a generar el PDF.")
+
+    # ------------------------------------------------------------
+    # INFORME MENSUAL (Excel): un mes de la categoría actual, o de todas en un ZIP
+    # ------------------------------------------------------------
+    with st.expander("📅 Informe mensual (Excel)"):
+        ci1, ci2, ci3 = st.columns([1, 1.6, 1])
+        with ci1:
+            mes_informe = st.selectbox("Mes", meses_disponibles, key=f"mes_informe_{categoria_key}")
+        with ci2:
+            alcance_informe = st.radio(
+                "Alcance", ["Esta categoría", "Todas las categorías (ZIP)"],
+                key="alcance_informe", horizontal=True,
+            )
+        firma_informe = (categoria_key, mes_informe, alcance_informe)
+        with ci3:
+            st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+            if st.button("📊 Generar informe", use_container_width=True, key="btn_generar_informe_mensual"):
+                with st.spinner("Generando informe mensual..."):
+                    try:
+                        if alcance_informe == "Esta categoría":
+                            datos_inf = construir_informe_mensual_xlsx(categoria_key, CATEGORIA, df, mes_informe)
+                            if datos_inf is None:
+                                st.session_state["informe_mensual"] = None
+                                st.warning(f"No hay datos de {CATEGORIA} en {mes_informe}.")
+                            else:
+                                st.session_state["informe_mensual"] = {
+                                    "firma": firma_informe, "bytes": datos_inf,
+                                    "nombre": f"informe_{categoria_key}_{mes_informe}.xlsx",
+                                    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                }
+                        else:
+                            zbuf = io.BytesIO()
+                            n_incluidas = 0
+                            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+                                for k_cat, cfg_cat in CATEGORIAS.items():
+                                    try:
+                                        df_k, _ = cargar_y_procesar(k_cat)
+                                    except Exception:
+                                        continue
+                                    if df_k.empty:
+                                        continue
+                                    x_k = construir_informe_mensual_xlsx(k_cat, cfg_cat["label"], df_k, mes_informe)
+                                    if x_k:
+                                        zf.writestr(f"informe_{k_cat}_{mes_informe}.xlsx", x_k)
+                                        n_incluidas += 1
+                            if n_incluidas == 0:
+                                st.session_state["informe_mensual"] = None
+                                st.warning(f"No hay datos de ninguna categoría en {mes_informe}.")
+                            else:
+                                st.session_state["informe_mensual"] = {
+                                    "firma": firma_informe, "bytes": zbuf.getvalue(),
+                                    "nombre": f"informes_{mes_informe}_todas_las_categorias.zip",
+                                    "mime": "application/zip",
+                                }
+                    except Exception as e_inf:
+                        st.session_state["informe_mensual"] = None
+                        st.error("❌ No se pudo generar el informe mensual.")
+                        st.exception(e_inf)
+        inf_guardado = st.session_state.get("informe_mensual")
+        if inf_guardado and inf_guardado["firma"] == firma_informe:
+            st.download_button(
+                f"⬇️ Descargar {inf_guardado['nombre']}", data=inf_guardado["bytes"],
+                file_name=inf_guardado["nombre"], mime=inf_guardado["mime"],
+                use_container_width=True, key="btn_descargar_informe_mensual",
+            )
+        elif inf_guardado:
+            st.caption("Has cambiado el mes o el alcance: vuelve a generar el informe.")
